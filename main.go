@@ -23,8 +23,13 @@ type node struct {
 }
 
 func main() {
-	file := flag.String("f", "", "markdown file to parse (default: stdin)")
+	file := flag.String("f", "", "markdown file to parse, may also be given as argument (default: stdin)")
+	tree := flag.Bool("tree", false, "dump the raw markdown node tree as json")
+	asJSON := flag.Bool("json", false, "print documents as json instead of yaml")
 	flag.Parse()
+	if *file == "" && flag.NArg() > 0 {
+		*file = flag.Arg(0)
+	}
 
 	var data []byte
 	var err error
@@ -36,6 +41,26 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error reading input:", err)
 		os.Exit(1)
+	}
+
+	if !*tree {
+		name := *file
+		if name == "" {
+			name = "stdin"
+		}
+		docs := map[string][]Document{"documents": buildDocuments(splitSources(data, name))}
+		var enc []byte
+		if *asJSON {
+			enc, err = json.MarshalIndent(docs, "", "  ")
+		} else {
+			enc, err = yaml.Marshal(docs)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error encoding output:", err)
+			os.Exit(1)
+		}
+		fmt.Print(string(enc))
+		return
 	}
 
 	meta, body := splitFrontMatter(data)
@@ -145,7 +170,7 @@ func wordCount(s string) int { return len(strings.Fields(strings.TrimSpace(s))) 
 
 func isTerm(node node) bool {
 	t := textOf(node, "text")
-	if t == "" || wordCount(t) > 8 || utf8.RuneCountInString(t) > 50 {
+	if t == "" || strings.HasSuffix(t, ".") || wordCount(t) > 8 || utf8.RuneCountInString(t) > 50 {
 		return false
 	}
 	r, _ := utf8.DecodeRuneInString(strings.TrimSpace(t))
