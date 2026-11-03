@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gomarkdown/markdown/ast"
 	"github.com/gomarkdown/markdown/parser"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,9 +28,36 @@ func main() {
 	file := flag.String("f", "", "markdown file to parse, may also be given as argument (default: stdin)")
 	tree := flag.Bool("tree", false, "dump the raw markdown node tree as json")
 	asJSON := flag.Bool("json", false, "print documents as json instead of yaml")
+	dir := flag.String("d", "", "directory of markdown files to read instead of a single file")
+	serve := flag.Bool("mcp", false, "serve the documents as MCP server on stdin/stdout")
 	flag.Parse()
 	if *file == "" && flag.NArg() > 0 {
 		*file = flag.Arg(0)
+	}
+
+	if *serve || *dir != "" {
+		root := *dir
+		if root == "" {
+			root = *file
+		}
+		if root == "" {
+			fmt.Fprintln(os.Stderr, "-mcp needs a file or a directory (-d)")
+			os.Exit(1)
+		}
+		corpus, err := loadCorpus(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error reading input:", err)
+			os.Exit(1)
+		}
+		if *serve {
+			if err := newMCPServer(corpus).Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+				fmt.Fprintln(os.Stderr, "mcp server:", err)
+				os.Exit(1)
+			}
+			return
+		}
+		printCorpus(corpus, *asJSON)
+		return
 	}
 
 	var data []byte
@@ -48,18 +77,7 @@ func main() {
 		if name == "" {
 			name = "stdin"
 		}
-		docs := map[string][]Document{"documents": buildDocuments(splitSources(data, name))}
-		var enc []byte
-		if *asJSON {
-			enc, err = json.MarshalIndent(docs, "", "  ")
-		} else {
-			enc, err = yaml.Marshal(docs)
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error encoding output:", err)
-			os.Exit(1)
-		}
-		fmt.Print(string(enc))
+		printCorpus(buildDocuments(splitSources(data, name)), *asJSON)
 		return
 	}
 
@@ -81,6 +99,21 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(string(enc))
+}
+
+func printCorpus(c *Corpus, asJSON bool) {
+	var enc []byte
+	var err error
+	if asJSON {
+		enc, err = json.MarshalIndent(c, "", "  ")
+	} else {
+		enc, err = yaml.Marshal(c)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error encoding output:", err)
+		os.Exit(1)
+	}
+	fmt.Print(string(enc))
 }
 
 var frontMatter = regexp.MustCompile(`(?s)\A---\n(.*?\n)---\n`)

@@ -10,12 +10,12 @@ import (
 )
 
 type Document struct {
-	Title    string          `json:"title" yaml:"title"`
-	Summary  string          `json:"summary" yaml:"summary"`
-	Distro   Distro          `json:"distro" yaml:"distro"`
-	Chapters []Chapter       `json:"chapters" yaml:"chapters"`
-	Glossary []GlossaryEntry `json:"glossary,omitempty" yaml:"glossary,omitempty"`
-	License  string          `json:"license,omitempty" yaml:"license,omitempty"`
+	ID       string    `json:"id" yaml:"id"`
+	Title    string    `json:"title" yaml:"title"`
+	Summary  string    `json:"summary" yaml:"summary"`
+	Distro   Distro    `json:"distro" yaml:"distro"`
+	Chapters []Chapter `json:"chapters" yaml:"chapters"`
+	License  string    `json:"license,omitempty" yaml:"license,omitempty"`
 }
 
 type Distro struct {
@@ -24,29 +24,33 @@ type Distro struct {
 }
 
 type Chapter struct {
-	Title    string   `json:"chapter_title" yaml:"chapter_title"`
-	Start    Location `json:"chapter_start" yaml:"chapter_start"`
-	End      Location `json:"chapter_end" yaml:"chapter_end"`
-	Commands []string `json:"commands,omitempty" yaml:"commands,omitempty"`
+	ID         string   `json:"id" yaml:"id"`
+	Title      string   `json:"chapter_title" yaml:"chapter_title"`
+	Summary    string   `json:"summary,omitempty" yaml:"summary,omitempty"`         // lead paragraphs
+	Start      uint     `json:"start" yaml:"start"`                                 // first line, counted in the original source file
+	End        uint     `json:"end" yaml:"end"`                                     // last line, counted in the original source file
+	FilePath   string   `json:"file_path" yaml:"file_path"`                         // file the chapter was parsed from (preferred)
+	SourcePath string   `json:"source_path,omitempty" yaml:"source_path,omitempty"` // original file before combining
+	Commands   []string `json:"commands,omitempty" yaml:"commands,omitempty"`
+	Terms      []string `json:"terms,omitempty" yaml:"terms,omitempty"` // glossary terms mentioned in the prose
 
-	summary string // lead paragraphs, used when the document has no description
-}
-
-type Location struct {
-	File string `json:"file" yaml:"file"`
-	Line int    `json:"line" yaml:"line"`
+	source string // key into Corpus.lines
+	prose  string // text outside of code blocks, used for glossary matching and search
 }
 
 type GlossaryEntry struct {
 	Term   string `json:"term" yaml:"term"`
 	WhatIs string `json:"whatis" yaml:"whatis"`
+
+	match []*regexp.Regexp // one per alias, see glossaryMatchers
 }
 
 // segment is one source file. For a combined file (see en-us/combine.sh) every
 // `<!-- Source: ... -->` marker starts a new segment; lines[0] is line 1 of the
 // original file.
 type segment struct {
-	file  string
+	file  string // original source file (from `<!-- Source: ... -->` or the input name)
+	name  string // file the content was parsed from (the combined file, or input name if not combined)
 	meta  map[string]any
 	lines []string
 	body  int // index of the first line after the front matter
@@ -65,17 +69,17 @@ func splitSources(data []byte, name string) []segment {
 		}
 		// the preamble before the first marker is just the combine header
 		if combined {
-			segs = append(segs, newSegment(file, lines[start:i]))
+			segs = append(segs, newSegment(file, name, lines[start:i]))
 		}
 		combined = true
 		file = m[1]
 		// combine.sh writes a blank line after the marker
 		start = min(i+2, len(lines))
 	}
-	return append(segs, newSegment(file, lines[start:]))
+	return append(segs, newSegment(file, name, lines[start:]))
 }
 
-func newSegment(file string, lines []string) segment {
+func newSegment(file, name string, lines []string) segment {
 	// drop the "\n---\n\n" separator combine.sh puts before the next marker
 	for len(lines) > 0 {
 		t := strings.TrimSpace(lines[len(lines)-1])
@@ -84,7 +88,7 @@ func newSegment(file string, lines []string) segment {
 		}
 		lines = lines[:len(lines)-1]
 	}
-	s := segment{file: file, lines: lines}
+	s := segment{file: file, name: name, lines: lines}
 	if len(lines) > 0 && lines[0] == "---" {
 		for j := 1; j < len(lines); j++ {
 			if lines[j] == "---" {
@@ -146,8 +150,9 @@ func metaString(meta map[string]any, key string) string {
 }
 
 // buildDocuments groups segments by directory (one directory per guide) and
-// turns each group into a Document.
-func buildDocuments(segs []segment) []Document {
+// turns each group into a Document. The glossaries of all guides are merged
+// into the corpus wide glossary.
+func buildDocuments(segs []segment) *Corpus {
 	var order []string
 	groups := map[string][]segment{}
 	for _, s := range segs {
@@ -157,15 +162,24 @@ func buildDocuments(segs []segment) []Document {
 		}
 		groups[dir] = append(groups[dir], s)
 	}
-	docs := []Document{}
-	for _, dir := range order {
-		docs = append(docs, buildDocument(groups[dir]))
+	c := &Corpus{Documents: []Document{}, lines: map[string][]string{}}
+	for _, s := range segs {
+		c.lines[s.file] = s.lines
 	}
-	return docs
+	ids := map[string]int{}
+	for _, dir := range order {
+		doc, glossary := buildDocument(groups[dir])
+		doc.ID = uniqueID(ids, documentID(groups[dir][0].file))
+		c.Documents = append(c.Documents, doc)
+		c.addGlossary(glossary)
+	}
+	c.finish()
+	return c
 }
 
-func buildDocument(segs []segment) Document {
+func buildDocument(segs []segment) (Document, []GlossaryEntry) {
 	doc := Document{Chapters: []Chapter{}}
+	var glossary []GlossaryEntry
 	var legal, licenseFile []string
 	var description string
 	for _, s := range segs {
@@ -180,7 +194,7 @@ func buildDocument(segs []segment) Document {
 		case strings.Contains(base, "license") || reLicenseTitle.MatchString(first):
 			licenseFile = append(licenseFile, s.lines[s.body:]...)
 		case strings.Contains(base, "glossary"):
-			doc.Glossary = append(doc.Glossary, parseGlossary(s.lines[s.body:])...)
+			glossary = append(glossary, parseGlossary(s.lines[s.body:])...)
 		case strings.HasPrefix(base, "rh-") || reHistory.MatchString(first):
 		default:
 			if doc.Title == "" {
@@ -193,18 +207,24 @@ func buildDocument(segs []segment) Document {
 					}
 				}
 			}
-			legal = append(legal, addChapters(&doc, s, hs)...)
+			l, g := addChapters(&doc, s, hs)
+			legal = append(legal, l...)
+			glossary = append(glossary, g...)
 		}
 	}
 	doc.Summary = description
 	if doc.Summary == "" && len(doc.Chapters) > 0 {
-		doc.Summary = doc.Chapters[0].summary
+		doc.Summary = doc.Chapters[0].Summary
 	}
 	doc.License = spdx(strings.Join(legal, "\n"))
 	if doc.License == "" {
 		doc.License = spdxFromLicenseText(strings.Join(licenseFile, "\n"))
 	}
-	return doc
+	ids := map[string]int{}
+	for i := range doc.Chapters {
+		doc.Chapters[i].ID = uniqueID(ids, slug(doc.Chapters[i].Title))
+	}
+	return doc, glossary
 }
 
 func addDistro(d *Distro, s segment) {
@@ -233,8 +253,9 @@ func addDistro(d *Distro, s segment) {
 }
 
 // addChapters appends one Chapter per top level section of s and returns the
-// text of the legal notice section(s), which are not treated as chapters.
-func addChapters(doc *Document, s segment, hs []heading) []string {
+// text of the legal notice section(s) and the glossary sections, which are not
+// treated as chapters.
+func addChapters(doc *Document, s segment, hs []heading) ([]string, []GlossaryEntry) {
 	level, h1 := 2, 0
 	for _, h := range hs {
 		if h.level == 1 {
@@ -245,6 +266,7 @@ func addChapters(doc *Document, s segment, hs []heading) []string {
 		level = 1
 	}
 	var legal []string
+	var glossary []GlossaryEntry
 	for i, h := range hs {
 		if h.level != level {
 			continue
@@ -266,19 +288,28 @@ func addChapters(doc *Document, s segment, hs []heading) []string {
 			legal = append(legal, section...)
 			continue
 		case glossaryHeading.MatchString(title):
-			doc.Glossary = append(doc.Glossary, parseGlossary(section)...)
+			glossary = append(glossary, parseGlossary(section)...)
 			continue
 		}
 		children := parseNodes(section)
+		filePath := s.name
+		sourcePath := ""
+		if s.file != s.name {
+			sourcePath = s.file
+		}
 		doc.Chapters = append(doc.Chapters, Chapter{
-			Title:    title,
-			Start:    Location{File: s.file, Line: h.idx + 1},
-			End:      Location{File: s.file, Line: end},
-			Commands: commandsIn(children),
-			summary:  leadText(children),
+			Title:      title,
+			Start:      uint(h.idx + 1),
+			End:        uint(end),
+			FilePath:   filePath,
+			SourcePath: sourcePath,
+			Commands:   commandsIn(children),
+			Summary:    leadText(children),
+			source:     s.file,
+			prose:      proseOf(children),
 		})
 	}
-	return legal
+	return legal, glossary
 }
 
 func parseNodes(lines []string) []node {
@@ -304,6 +335,31 @@ func leadText(children []node) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// proseOf returns the running text of the nodes, leaving out code blocks and
+// inline code so that commands like `crm configure` are not taken as mentions
+// of a glossary term.
+func proseOf(children []node) string {
+	var b strings.Builder
+	var walk func(n node)
+	walk = func(n node) {
+		switch n.Type {
+		case "CodeBlock", "Code", "HTMLBlock", "HTMLSpan":
+			return
+		case "Text":
+			b.WriteString(textOf(n, "text"))
+		case "Paragraph", "Heading", "ListItem", "TableCell":
+			defer b.WriteString("\n")
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	for _, c := range children {
+		walk(c)
+	}
+	return b.String()
 }
 
 func parseGlossary(lines []string) []GlossaryEntry {
