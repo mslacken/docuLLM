@@ -1,10 +1,12 @@
-package main
+package mcpserver
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"docullm/internal/docparse"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -15,12 +17,12 @@ type listDocumentsIn struct {
 }
 
 type documentInfo struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Summary  string `json:"summary"`
-	Distro   Distro `json:"distro"`
-	License  string `json:"license,omitempty"`
-	Chapters int    `json:"chapters"`
+	ID       string              `json:"id"`
+	Title    string              `json:"title"`
+	Summary  string              `json:"summary"`
+	Distro   docparse.Distro     `json:"distro"`
+	License  string              `json:"license,omitempty"`
+	Chapters int                 `json:"chapters"`
 }
 
 type listDocumentsOut struct {
@@ -40,14 +42,14 @@ type tocEntry struct {
 }
 
 type chapterOut struct {
-	ID         string          `json:"id"`
-	Title      string          `json:"title"`
-	SourcePath string          `json:"source_path"`
-	Start      uint            `json:"start"`
-	End        uint            `json:"end"`
-	Markdown   string          `json:"markdown"`
-	Commands   []string        `json:"commands"`
-	Glossary   []GlossaryEntry `json:"glossary"`
+	ID         string                    `json:"id"`
+	Title      string                    `json:"title"`
+	SourcePath string                    `json:"source_path"`
+	Start      uint                      `json:"start"`
+	End        uint                      `json:"end"`
+	Markdown   string                    `json:"markdown"`
+	Commands   []string                  `json:"commands"`
+	Glossary   []docparse.GlossaryEntry  `json:"glossary"`
 }
 
 type readDocumentOut struct {
@@ -64,7 +66,7 @@ type searchDocsIn struct {
 }
 
 type searchDocsOut struct {
-	Hits []searchHit `json:"hits"`
+	Hits []docparse.SearchHit `json:"hits"`
 }
 
 type findCommandIn struct {
@@ -72,7 +74,7 @@ type findCommandIn struct {
 }
 
 type findCommandOut struct {
-	Commands []commandHit `json:"commands"`
+	Commands []docparse.CommandHit `json:"commands"`
 }
 
 type defineTermIn struct {
@@ -80,15 +82,15 @@ type defineTermIn struct {
 }
 
 type defineTermOut struct {
-	Entries []GlossaryEntry `json:"entries"`
+	Entries []docparse.GlossaryEntry `json:"entries"`
 }
 
-func info(d *Document) documentInfo {
+func info(d *docparse.Document) documentInfo {
 	return documentInfo{ID: d.ID, Title: d.Title, Summary: d.Summary, Distro: d.Distro, License: d.License, Chapters: len(d.Chapters)}
 }
 
-func (c *Corpus) readDocument(docID, chapterID string) (readDocumentOut, error) {
-	doc := c.document(docID)
+func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (readDocumentOut, error) {
+	doc := c.Document(docID)
 	if doc == nil {
 		return readDocumentOut{}, fmt.Errorf("unknown document %q, use list_documents to get the ids", docID)
 	}
@@ -99,7 +101,7 @@ func (c *Corpus) readDocument(docID, chapterID string) (readDocumentOut, error) 
 	if chapterID == "" {
 		return out, nil
 	}
-	ch := doc.chapter(chapterID)
+	ch := doc.Chapter(chapterID)
 	if ch == nil {
 		return readDocumentOut{}, fmt.Errorf("unknown chapter %q in document %q", chapterID, docID)
 	}
@@ -109,7 +111,7 @@ func (c *Corpus) readDocument(docID, chapterID string) (readDocumentOut, error) 
 	}
 	out.Chapter = &chapterOut{
 		ID: ch.ID, Title: ch.Title, SourcePath: src, Start: ch.Start, End: ch.End,
-		Markdown: c.text(ch), Commands: nonNil(ch.Commands), Glossary: c.glossaryFor(ch.Terms),
+		Markdown: c.Text(ch), Commands: nonNil(ch.Commands), Glossary: c.GlossaryFor(ch.Terms),
 	}
 	return out, nil
 }
@@ -121,7 +123,8 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
-func newMCPServer(c *Corpus) *mcp.Server {
+// NewServer builds the MCP server exposing the corpus' documents.
+func NewServer(c *docparse.Corpus) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "docullm", Version: "0.1.0"}, &mcp.ServerOptions{
 		Instructions: "Product documentation. Use search_docs or list_documents to find a document, " +
 			"read_document to get its table of contents or a chapter, find_command to find where a " +
@@ -134,7 +137,7 @@ func newMCPServer(c *Corpus) *mcp.Server {
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in listDocumentsIn) (*mcp.CallToolResult, listDocumentsOut, error) {
 		out := listDocumentsOut{Documents: []documentInfo{}}
 		for i := range c.Documents {
-			if c.Documents[i].matches(in.Product, in.Version) {
+			if c.Documents[i].Matches(in.Product, in.Version) {
 				out.Documents = append(out.Documents, info(&c.Documents[i]))
 			}
 		}
@@ -146,7 +149,7 @@ func newMCPServer(c *Corpus) *mcp.Server {
 		Description: "Return a document's metadata and table of contents. If chapter_id is given, also return " +
 			"that chapter's markdown, the commands it shows and the definitions of all glossary terms it mentions.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in readDocumentIn) (*mcp.CallToolResult, readDocumentOut, error) {
-		out, err := c.readDocument(in.DocID, in.ChapterID)
+		out, err := BuildReadDocument(c, in.DocID, in.ChapterID)
 		return nil, out, err
 	})
 
@@ -158,28 +161,28 @@ func newMCPServer(c *Corpus) *mcp.Server {
 		if limit <= 0 {
 			limit = 10
 		}
-		return nil, searchDocsOut{Hits: nonNil(c.search(in.Query, in.Product, in.Version, limit))}, nil
+		return nil, searchDocsOut{Hits: nonNil(c.Search(in.Query, in.Product, in.Version, limit))}, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "find_command",
 		Description: "Find the documented shell commands containing all given words and the chapters showing them.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in findCommandIn) (*mcp.CallToolResult, findCommandOut, error) {
-		return nil, findCommandOut{Commands: nonNil(c.findCommand(in.Pattern))}, nil
+		return nil, findCommandOut{Commands: nonNil(c.FindCommand(in.Pattern))}, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "define_term",
 		Description: "Look up a term or abbreviation in the glossary.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in defineTermIn) (*mcp.CallToolResult, defineTermOut, error) {
-		return nil, defineTermOut{Entries: nonNil(c.defineTerm(in.Term))}, nil
+		return nil, defineTermOut{Entries: nonNil(c.DefineTerm(in.Term))}, nil
 	})
 
 	addResources(srv, c)
 	return srv
 }
 
-func addResources(srv *mcp.Server, c *Corpus) {
+func addResources(srv *mcp.Server, c *docparse.Corpus) {
 	jsonResult := func(uri string, v any) (*mcp.ReadResourceResult, error) {
 		data, err := json.MarshalIndent(v, "", "  ")
 		if err != nil {
@@ -210,7 +213,7 @@ func addResources(srv *mcp.Server, c *Corpus) {
 	handler := func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		uri := req.Params.URI
 		docID, chapterID, _ := strings.Cut(strings.TrimPrefix(uri, "docs://"), "/")
-		out, err := c.readDocument(docID, chapterID)
+		out, err := BuildReadDocument(c, docID, chapterID)
 		if err != nil {
 			return nil, mcp.ResourceNotFoundError(uri)
 		}

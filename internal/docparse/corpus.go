@@ -1,4 +1,4 @@
-package main
+package docparse
 
 import (
 	"fmt"
@@ -25,10 +25,10 @@ type Corpus struct {
 	total int                 // number of chapters
 }
 
-// loadCorpus reads either a single (possibly combined) markdown file or a
+// LoadCorpus reads either a single (possibly combined) markdown file or a
 // directory tree of markdown files. In a directory, files that were produced
 // by combine.sh are skipped, as their content is already in the tree.
-func loadCorpus(root string) (*Corpus, error) {
+func LoadCorpus(root string) (*Corpus, error) {
 	st, err := os.Stat(root)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func loadCorpus(root string) (*Corpus, error) {
 		if err != nil {
 			return nil, err
 		}
-		return buildDocuments(splitSources(data, root)), nil
+		return BuildDocuments(SplitSources(data, root)), nil
 	}
 	var segs []segment
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -66,7 +66,7 @@ func loadCorpus(root string) (*Corpus, error) {
 	if len(segs) == 0 {
 		return nil, fmt.Errorf("no markdown files found in %s", root)
 	}
-	return buildDocuments(segs), nil
+	return BuildDocuments(segs), nil
 }
 
 func isCombined(data []byte) bool {
@@ -141,7 +141,7 @@ func (c *Corpus) finish() {
 			ch.Terms = c.termsIn(ch.prose)
 			c.total++
 			seen := map[string]bool{}
-			for _, w := range words(ch.Title + " " + c.text(ch)) {
+			for _, w := range words(ch.Title + " " + c.Text(ch)) {
 				if !seen[w] {
 					seen[w] = true
 					c.df[w]++
@@ -201,7 +201,8 @@ func (c *Corpus) termsIn(text string) []string {
 	return out
 }
 
-func (c *Corpus) document(id string) *Document {
+// Document returns the document with the given id, or nil.
+func (c *Corpus) Document(id string) *Document {
 	for i := range c.Documents {
 		if c.Documents[i].ID == id {
 			return &c.Documents[i]
@@ -210,7 +211,8 @@ func (c *Corpus) document(id string) *Document {
 	return nil
 }
 
-func (d *Document) chapter(id string) *Chapter {
+// Chapter returns the chapter with the given id, or nil.
+func (d *Document) Chapter(id string) *Chapter {
 	for i := range d.Chapters {
 		if d.Chapters[i].ID == id {
 			return &d.Chapters[i]
@@ -219,8 +221,8 @@ func (d *Document) chapter(id string) *Chapter {
 	return nil
 }
 
-// text returns the markdown of the chapter.
-func (c *Corpus) text(ch *Chapter) string {
+// Text returns the markdown of the chapter.
+func (c *Corpus) Text(ch *Chapter) string {
 	lines := c.lines[ch.source]
 	start, end := int(ch.Start)-1, min(int(ch.End), len(lines))
 	if start < 0 || start >= end {
@@ -229,7 +231,9 @@ func (c *Corpus) text(ch *Chapter) string {
 	return strings.Join(lines[start:end], "\n")
 }
 
-func (d *Document) matches(product, version string) bool {
+// Matches reports whether the document applies to product and version. An empty
+// selector matches everything.
+func (d *Document) Matches(product, version string) bool {
 	if product != "" && !strings.Contains(strings.ToLower(d.Distro.Product), strings.ToLower(product)) {
 		return false
 	}
@@ -242,7 +246,8 @@ func words(s string) []string {
 	})
 }
 
-type searchHit struct {
+// SearchHit is one ranked search result.
+type SearchHit struct {
 	DocID     string  `json:"doc_id"`
 	ChapterID string  `json:"chapter_id"`
 	Document  string  `json:"document"`
@@ -252,22 +257,22 @@ type searchHit struct {
 	Score     float64 `json:"score"`
 }
 
-// search ranks chapters by tf-idf of the query words over the chapter text,
+// Search ranks chapters by tf-idf of the query words over the chapter text,
 // with matches in the chapter title and summary weighted higher.
-func (c *Corpus) search(query, product, version string, limit int) []searchHit {
+func (c *Corpus) Search(query, product, version string, limit int) []SearchHit {
 	q := words(query)
 	if len(q) == 0 {
 		return nil
 	}
-	var hits []searchHit
+	var hits []SearchHit
 	for d := range c.Documents {
 		doc := &c.Documents[d]
-		if !doc.matches(product, version) {
+		if !doc.Matches(product, version) {
 			continue
 		}
 		for i := range doc.Chapters {
 			ch := &doc.Chapters[i]
-			text := c.text(ch)
+			text := c.Text(ch)
 			tf := map[string]int{}
 			for _, w := range words(text) {
 				tf[w]++
@@ -287,7 +292,7 @@ func (c *Corpus) search(query, product, version string, limit int) []searchHit {
 			}
 			// prefer chapters that contain all of the query words
 			score *= float64(found) / float64(len(q))
-			hits = append(hits, searchHit{
+			hits = append(hits, SearchHit{
 				DocID: doc.ID, ChapterID: ch.ID, Document: doc.Title, Title: ch.Title,
 				Summary: ch.Summary, Snippet: snippet(text, q), Score: math.Round(score*100) / 100,
 			})
@@ -335,18 +340,19 @@ func snippet(text string, q []string) string {
 	return best
 }
 
-type commandHit struct {
+// CommandHit locates a shell command within a chapter.
+type CommandHit struct {
 	Command   string `json:"command"`
 	DocID     string `json:"doc_id"`
 	ChapterID string `json:"chapter_id"`
 	Title     string `json:"chapter_title"`
 }
 
-// findCommand returns the commands that contain every word of pattern, case
+// FindCommand returns the commands that contain every word of pattern, case
 // insensitive.
-func (c *Corpus) findCommand(pattern string) []commandHit {
+func (c *Corpus) FindCommand(pattern string) []CommandHit {
 	q := strings.Fields(strings.ToLower(pattern))
-	var out []commandHit
+	var out []CommandHit
 	for _, doc := range c.Documents {
 		for _, ch := range doc.Chapters {
 		cmds:
@@ -357,16 +363,16 @@ func (c *Corpus) findCommand(pattern string) []commandHit {
 						continue cmds
 					}
 				}
-				out = append(out, commandHit{Command: cmd, DocID: doc.ID, ChapterID: ch.ID, Title: ch.Title})
+				out = append(out, CommandHit{Command: cmd, DocID: doc.ID, ChapterID: ch.ID, Title: ch.Title})
 			}
 		}
 	}
 	return out
 }
 
-// defineTerm looks up a term by its full name or one of its aliases. If
+// DefineTerm looks up a term by its full name or one of its aliases. If
 // nothing matches exactly, all terms containing the query are returned.
-func (c *Corpus) defineTerm(term string) []GlossaryEntry {
+func (c *Corpus) DefineTerm(term string) []GlossaryEntry {
 	t := strings.ToLower(strings.TrimSpace(term))
 	for _, e := range c.Glossary {
 		if strings.ToLower(e.Term) == t {
@@ -387,8 +393,8 @@ func (c *Corpus) defineTerm(term string) []GlossaryEntry {
 	return out
 }
 
-// glossaryFor returns the glossary entries for the given terms.
-func (c *Corpus) glossaryFor(terms []string) []GlossaryEntry {
+// GlossaryFor returns the glossary entries for the given terms.
+func (c *Corpus) GlossaryFor(terms []string) []GlossaryEntry {
 	out := []GlossaryEntry{}
 	for _, t := range terms {
 		if e := c.term(t); e != nil {

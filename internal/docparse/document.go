@@ -1,4 +1,4 @@
-package main
+package docparse
 
 import (
 	"path"
@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Document is a parsed guide.
 type Document struct {
 	ID       string    `json:"id" yaml:"id"`
 	Title    string    `json:"title" yaml:"title"`
@@ -18,11 +19,13 @@ type Document struct {
 	License  string    `json:"license,omitempty" yaml:"license,omitempty"`
 }
 
+// Distro is the product and versions a document applies to.
 type Distro struct {
 	Product  string   `json:"product,omitempty" yaml:"product,omitempty"`
 	Versions []string `json:"versions,omitempty" yaml:"versions,omitempty"`
 }
 
+// Chapter is a top level section of a document.
 type Chapter struct {
 	ID         string   `json:"id" yaml:"id"`
 	Title      string   `json:"chapter_title" yaml:"chapter_title"`
@@ -38,6 +41,7 @@ type Chapter struct {
 	prose  string // text outside of code blocks, used for glossary matching and search
 }
 
+// GlossaryEntry is a term and its definition.
 type GlossaryEntry struct {
 	Term   string `json:"term" yaml:"term"`
 	WhatIs string `json:"whatis" yaml:"whatis"`
@@ -58,7 +62,9 @@ type segment struct {
 
 var sourceMarker = regexp.MustCompile(`^<!-- Source: (.+?) -->\s*$`)
 
-func splitSources(data []byte, name string) []segment {
+// SplitSources splits the markdown in data into one segment per <!-- Source: -->
+// marker. For non combined input it returns a single segment named name.
+func SplitSources(data []byte, name string) []segment {
 	lines := strings.Split(string(data), "\n")
 	var segs []segment
 	file, start, combined := name, 0, false
@@ -149,10 +155,10 @@ func metaString(meta map[string]any, key string) string {
 	return ""
 }
 
-// buildDocuments groups segments by directory (one directory per guide) and
+// BuildDocuments groups segments by directory (one directory per guide) and
 // turns each group into a Document. The glossaries of all guides are merged
 // into the corpus wide glossary.
-func buildDocuments(segs []segment) *Corpus {
+func BuildDocuments(segs []segment) *Corpus {
 	var order []string
 	groups := map[string][]segment{}
 	for _, s := range segs {
