@@ -10,6 +10,7 @@ import (
 
 	"docullm/internal/docparse"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,16 +23,14 @@ func debugf(format string, args ...any) {
 }
 
 type listDocumentsIn struct {
-	Product string `json:"product,omitempty" jsonschema:"only documents whose product contains this text, e.g. 'High Availability'"`
+	Product string `json:"product,omitempty" jsonschema:"only documents whose product contains this text, e.g. 'Register Product'"`
 	Version string `json:"version,omitempty" jsonschema:"only documents for this product version, e.g. '16.0'"`
 }
 
 type documentInfo struct {
 	ID       string          `json:"id"`
 	Title    string          `json:"title"`
-	Summary  string          `json:"summary"`
 	Distro   docparse.Distro `json:"distro"`
-	License  string          `json:"license,omitempty"`
 	Chapters int             `json:"chapters"`
 }
 
@@ -58,8 +57,8 @@ type chapterOut struct {
 	Start      uint                     `json:"start"`
 	End        uint                     `json:"end"`
 	Markdown   string                   `json:"markdown"`
-	Commands   []string                 `json:"commands"`
-	Glossary   []docparse.GlossaryEntry `json:"glossary"`
+	Commands   []string                 `json:"commands,omitempty"`
+	Glossary   []docparse.GlossaryEntry `json:"glossary,omitempty"`
 }
 
 type ReadDocumentOut struct {
@@ -96,7 +95,7 @@ type DefineTermOut struct {
 }
 
 func info(d *docparse.Document) documentInfo {
-	return documentInfo{ID: d.ID, Title: d.Title, Summary: d.Summary, Distro: d.Distro, License: d.License, Chapters: len(d.Chapters)}
+	return documentInfo{ID: d.ID, Title: d.Title, Distro: d.Distro, Chapters: len(d.Chapters)}
 }
 
 func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (ReadDocumentOut, error) {
@@ -211,6 +210,42 @@ func sortedKeys(set map[string]bool) []string {
 	return out
 }
 
+// setEnum restricts a property to the given values. An empty list leaves the
+// property unrestricted. The enum is derived from the corpus, so it only ever
+// contains products and versions that actually occur in the documents.
+func setEnum(s *jsonschema.Schema, prop string, values []string) {
+	if p := s.Properties[prop]; p != nil && len(values) > 0 {
+		p.Enum = make([]any, len(values))
+		for i, v := range values {
+			p.Enum[i] = v
+		}
+	}
+}
+
+// CreateListDocumentsSchema returns the input schema for list_documents with
+// product and version restricted to the values present in the corpus.
+func CreateListDocumentsSchema(c *docparse.Corpus) *jsonschema.Schema {
+	schema, _ := jsonschema.For[listDocumentsIn](nil)
+	if schema != nil {
+		ov := CorpusSummary(c)
+		setEnum(schema, "product", ov.Products)
+		setEnum(schema, "version", ov.Versions)
+	}
+	return schema
+}
+
+// CreateSearchDocsSchema returns the input schema for search_docs with product
+// and version restricted to the values present in the corpus.
+func CreateSearchDocsSchema(c *docparse.Corpus) *jsonschema.Schema {
+	schema, _ := jsonschema.For[searchDocsIn](nil)
+	if schema != nil {
+		ov := CorpusSummary(c)
+		setEnum(schema, "product", ov.Products)
+		setEnum(schema, "version", ov.Versions)
+	}
+	return schema
+}
+
 // NewServer builds the MCP server exposing the corpus' documents.
 func NewServer(c *docparse.Corpus) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "docullm", Version: "0.1.0"}, &mcp.ServerOptions{
@@ -222,6 +257,7 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_documents",
 		Description: "List the available documents (guides) with id, title, summary and product versions.",
+		InputSchema: CreateListDocumentsSchema(c),
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in listDocumentsIn) (*mcp.CallToolResult, ListDocumentsOut, error) {
 		debugf("list_documents product=%q version=%q", in.Product, in.Version)
 		return nil, ListDocuments(c, in.Product, in.Version), nil
@@ -241,6 +277,7 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "search_docs",
 		Description: "Full text search over all chapters. Returns ranked hits with doc_id and chapter_id for read_document.",
+		InputSchema: CreateSearchDocsSchema(c),
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchDocsIn) (*mcp.CallToolResult, SearchDocsOut, error) {
 		debugf("search_docs query=%q product=%q version=%q limit=%d", in.Query, in.Product, in.Version, in.Limit)
 		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit)

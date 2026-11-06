@@ -134,10 +134,20 @@
 
 {{if eq .Page "documents"}}
   <h2>List documents</h2>
-  <p class="desc">All guides with id, title, summary, product and versions. Filter by product name or version.</p>
+  <p class="desc">All guides with id, title, product and versions. Filter by product name or version.</p>
   <form method="get" action="/documents" class="grid">
-    <div><label>Product <span class="hint">substring, case-insensitive</span></label><input name="product" value="{{esc .Product}}"></div>
-    <div><label>Version</label><input name="version" value="{{esc .Version}}"></div>
+    <div><label>Product <span class="hint">one present in the corpus</span></label>
+      <select name="product">
+        <option value="" {{if eq (str .Product) ""}}selected{{end}}></option>
+        {{range .Products}}<option value="{{esc .}}" {{if eq (str .) (str $.Product)}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
+    <div><label>Version <span class="hint">one present in the corpus</span></label>
+      <select name="version">
+        <option value="" {{if eq (str .Version) ""}}selected{{end}}></option>
+        {{range .Versions}}<option value="{{esc .}}" {{if eq (str .) (str $.Version)}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
     <button class="run" type="submit">List</button>
   </form>
   {{if .Docs}}
@@ -149,7 +159,6 @@
             <a href="/document/{{.ID}}">Read &rarr;</a>
           </div>
           <div class="meta">
-            {{if .Summary}}{{esc .Summary}} &middot; {{end}}
             <span class="chip prod">{{esc .Distro.Product}}{{if .Distro.Versions}} &middot; {{join .Distro.Versions}}{{end}}</span>
             <span class="chip">{{.Chapters}} chapter{{if ne .Chapters 1}}s{{end}}</span>
             <span class="pill">{{esc .ID}}</span>
@@ -170,7 +179,6 @@
         {{if .Read.License}}<span class="chip prod">{{esc .Read.License}}</span>{{end}}
       </div>
       <div class="meta">
-        {{if .Read.Summary}}{{esc .Read.Summary}} &middot; {{end}}
         <span class="chip prod">{{esc .Read.Distro.Product}}{{if .Read.Distro.Versions}} &middot; {{join .Read.Distro.Versions}}{{end}}</span>
         <span class="chip">{{.Read.Chapters}} chapter{{if ne .Read.Chapters 1}}s{{end}}</span>
         <span class="pill">{{esc .Read.ID}}</span>
@@ -219,8 +227,18 @@
   <p class="desc">Full-text ranked search over every chapter. Results link straight to the chapter.</p>
   <form method="get" action="/search" class="grid">
     <div class="span2"><label>Query <span class="req">*</span></label><input name="query" value="{{esc .Query}}" placeholder="e.g. fence node, quorum, split brain"></div>
-    <div><label>Product</label><input name="product" value="{{esc .Product}}"></div>
-    <div><label>Version</label><input name="version" value="{{esc .Version}}"></div>
+    <div><label>Product <span class="hint">one present in the corpus</span></label>
+      <select name="product">
+        <option value="" {{if eq (str .Product) ""}}selected{{end}}></option>
+        {{range .Products}}<option value="{{esc .}}" {{if eq (str .) (str $.Product)}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
+    <div><label>Version <span class="hint">one present in the corpus</span></label>
+      <select name="version">
+        <option value="" {{if eq (str .Version) ""}}selected{{end}}></option>
+        {{range .Versions}}<option value="{{esc .}}" {{if eq (str .) (str $.Version)}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
     <div><label>Limit <span class="hint">default 10</span></label><input name="limit" type="number" min="1" value="{{.Limit}}" placeholder="10"></div>
     <button class="run" type="submit">Search</button>
   </form>

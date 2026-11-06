@@ -43,6 +43,11 @@ type pageData struct {
 	Title   string
 	Summary *mcpserver.CorpusOverview
 
+	// the distinct products and versions in the corpus, used to constrain the
+	// distro filters (mirrors the MCP input-schema enum)
+	Products []string
+	Versions []string
+
 	// documents
 	Product string
 	Version string
@@ -98,6 +103,8 @@ func (a *webApp) renderPage(w http.ResponseWriter, r *http.Request, data pageDat
 		ov := mcpserver.CorpusSummary(a.corpus)
 		data.Summary = &ov
 	}
+	data.Products = data.Summary.Products
+	data.Versions = data.Summary.Versions
 	if err := a.tmpl.ExecuteTemplate(w, "ui.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -110,6 +117,7 @@ func serveWeb(c *docparse.Corpus) http.Handler {
 	tmpl, err := template.New("page").Funcs(template.FuncMap{
 		"esc":  func(s any) template.HTML { return template.HTML(escText(s)) },
 		"join": func(ss []string) string { return strings.Join(ss, ", ") },
+		"str":  func(v any) string { return fmt.Sprint(v) },
 	}).ParseFS(ui, "ui.html")
 	if err != nil {
 		panic(err)
