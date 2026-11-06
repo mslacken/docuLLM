@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{esc .Title}} — docuLLM</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel2: #1d2130;
+    --border: #2a3040;
+    --text: #e6e9f0;
+    --muted: #9aa4bd;
+    --accent: #6ea8ff;
+    --accent2: #4ade80;
+    --code: #212737;
+    --err: #ff7a7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    background: linear-gradient(180deg, #141826, #0f1117);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 19px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .stats { margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; }
+  header .stat { font-size: 12px; color: var(--muted); }
+  header .stat b { color: var(--text); font-size: 14px; margin-right: 4px; }
+  nav { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--panel); overflow-x: auto; }
+  nav a {
+    color: var(--muted); padding: 12px 16px; font-size: 14px;
+    border-bottom: 2px solid transparent; white-space: nowrap; text-decoration: none;
+  }
+  nav a:hover { color: var(--text); }
+  nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  main a { color: var(--accent); text-decoration: none; }
+  main a:hover { text-decoration: underline; }
+  main h2 { font-size: 16px; margin: 0 0 4px; }
+  main .desc { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  form.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; margin-bottom: 8px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input {
+    width: 100%; padding: 9px 11px; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; font-size: 14px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .run {
+    background: var(--accent); color: #0b0f1a; border: 0; padding: 10px 18px;
+    border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .run:hover { filter: brightness(1.08); }
+  .result-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .result-card .title { font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .result-card .meta { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .result-card .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--panel2); border: 1px solid var(--border); color: var(--accent); font-weight: 500; }
+  .result-card .score { color: var(--accent2); font-weight: 600; font-size: 12.5px; }
+  .empty { color: var(--muted); font-style: italic; padding: 10px 2px; }
+  pre {
+    background: var(--code); padding: 12px 14px; border-radius: 8px; overflow-x: auto;
+    font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace; margin: 8px 0 0;
+    border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word;
+  }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 2px 6px; border-radius: 5px; }
+  .chips code { background: none; padding: 0; margin-right: 10px; display: inline-block; margin-top: 4px; }
+  .cmd-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .cmd-row code { flex: 1; background: none; padding: 0; color: var(--accent2); }
+  .gloss { padding: 12px 0; }
+  .gloss dt { font-weight: 600; font-size: 15px; margin-top: 12px; color: var(--accent); }
+  .gloss dd { margin: 4px 0 0; color: var(--text); }
+  .toc { list-style: none; padding: 0; margin: 8px 0 0; }
+  .toc li { padding: 8px 12px; border-radius: 7px; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border: 1px solid transparent; }
+  .toc li:hover { background: var(--panel2); border-color: var(--border); }
+  .toc li a { flex: 1; }
+  .toc li .n { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .section-h { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 20px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .chip { display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 20px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+  .chip.prod { color: var(--accent); }
+  .grid .span2 { grid-column: span 2; }
+  .req { color: var(--err); }
+  .hint { font-size: 12px; color: var(--muted); }
+  .pill { font-size: 11px; padding: 2px 9px; border-radius: 14px; border: 1px solid var(--border); color: var(--muted); background: var(--panel2); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .tool { display: block; color: inherit; text-decoration: none; }
+  .tool:hover { border-color: var(--accent); filter: brightness(1.05); }
+  .tool h2 { margin: 0 0 4px; color: var(--accent); }
+  .tool p { margin: 0; color: var(--muted); font-size: 13px; }
+  @media (max-width: 640px) {
+    form.grid .span2 { grid-column: span 1; }
+    nav { padding: 0 12px; }
+    main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>docuLLM</h1>
+  <span class="sub">Documentation tools · pure HTML</span>
+  {{if .Summary}}<span class="stats">
+    <span class="stat"><b>{{.Summary.Documents}}</b>docs</span>
+    <span class="stat"><b>{{.Summary.Chapters}}</b>chapters</span>
+    <span class="stat"><b>{{.Summary.Terms}}</b>terms</span>
+    <span class="stat"><b>{{.Summary.Commands}}</b>commands</span>
+  </span>{{end}}
+</header>
+
+<nav>
+  <a {{if eq .Page "documents"}}class="active"{{end}} href="/documents">Documents</a>
+  <a {{if or (eq .Page "read") (eq .Page "search")}}class="active"{{end}} href="/search">Search</a>
+  <a {{if eq .Page "command"}}class="active"{{end}} href="/command">Find command</a>
+  <a {{if eq .Page "term"}}class="active"{{end}} href="/term">Define term</a>
+</nav>
+
+<main>
+{{if eq .Page "index"}}
+  <div class="grid2">
+    <a class="result-card tool" href="/documents"><h2>Documents</h2><p>List all guides with their product and versions, then open any one.</p></a>
+    <a class="result-card tool" href="/search"><h2>Search</h2><p>Full-text ranked search over every chapter.</p></a>
+    <a class="result-card tool" href="/command"><h2>Find command</h2><p>Locate documented shell commands by the words they contain.</p></a>
+    <a class="result-card tool" href="/term"><h2>Define term</h2><p>Look up a glossary term or abbreviation.</p></a>
+  </div>
+{{end}}
+
+{{if eq .Page "documents"}}
+  <h2>List documents</h2>
+  <p class="desc">All guides with id, title, summary, product and versions. Filter by product name or version.</p>
+  <form method="get" action="/documents" class="grid">
+    <div><label>Product <span class="hint">substring, case-insensitive</span></label><input name="product" value="{{esc .Product}}"></div>
+    <div><label>Version</label><input name="version" value="{{esc .Version}}"></div>
+    <button class="run" type="submit">List</button>
+  </form>
+  {{if .Docs}}
+    {{if .Docs.Documents}}
+      {{range .Docs.Documents}}
+        <div class="result-card">
+          <div class="title">
+            <span>{{esc .Title}}</span>
+            <a href="/document/{{.ID}}">Read &rarr;</a>
+          </div>
+          <div class="meta">
+            {{if .Summary}}{{esc .Summary}} &middot; {{end}}
+            <span class="chip prod">{{esc .Distro.Product}}{{if .Distro.Versions}} &middot; {{join .Distro.Versions}}{{end}}</span>
+            <span class="chip">{{.Chapters}} chapter{{if ne .Chapters 1}}s{{end}}</span>
+            <span class="pill">{{esc .ID}}</span>
+          </div>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="empty">No documents match this filter.</div>
+    {{end}}
+  {{end}}
+{{end}}
+
+{{if eq .Page "read"}}
+  {{if .Read}}
+    <div class="result-card">
+      <div class="title">
+        <span>{{esc .Read.Title}}</span>
+        {{if .Read.License}}<span class="chip prod">{{esc .Read.License}}</span>{{end}}
+      </div>
+      <div class="meta">
+        {{if .Read.Summary}}{{esc .Read.Summary}} &middot; {{end}}
+        <span class="chip prod">{{esc .Read.Distro.Product}}{{if .Read.Distro.Versions}} &middot; {{join .Read.Distro.Versions}}{{end}}</span>
+        <span class="chip">{{.Read.Chapters}} chapter{{if ne .Read.Chapters 1}}s{{end}}</span>
+        <span class="pill">{{esc .Read.ID}}</span>
+      </div>
+    </div>
+
+    {{if .Read.TOC}}
+      <div class="result-card">
+        <div class="section-h">Table of contents</div>
+        <ul class="toc">
+          {{range .Read.TOC}}
+            <li>
+              <a href="/chapter/{{$.Read.ID}}/{{.ID}}">{{esc .Title}}{{if .Summary}} <span class="hint">&mdash; {{esc .Summary}}</span>{{end}}</a>
+              <span class="n">{{.Commands}} cmd</span>
+            </li>
+          {{end}}
+        </ul>
+      </div>
+    {{end}}
+
+    {{if .Read.Chapter}}
+      <div class="result-card">
+        <h2 style="margin:0 0 4px">{{esc .Read.Chapter.Title}}</h2>
+        {{if .Read.Chapter.SourcePath}}<div class="meta">source: <code>{{esc .Read.Chapter.SourcePath}}</code> &middot; lines {{.Read.Chapter.Start}}&ndash;{{.Read.Chapter.End}}</div>{{end}}
+        <div class="section-h">Chapter</div>
+        {{.ChapterHTML}}
+        {{if .Read.Chapter.Commands}}
+          <div class="section-h">Commands in this chapter</div>
+          <div class="chips">{{range .Read.Chapter.Commands}}<code>{{esc .}}</code> {{end}}</div>
+        {{end}}
+        {{if .Read.Chapter.Glossary}}
+          <div class="section-h">Glossary terms mentioned</div>
+          <dl class="gloss">{{range .Read.Chapter.Glossary}}<dt>{{esc .Term}}</dt><dd>{{esc .WhatIs}}</dd>{{end}}</dl>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="hint">No chapter selected &mdash; pick one from the table of contents above.</div>
+    {{end}}
+  {{else}}
+    <div class="empty">Unknown document. <a href="/documents">Browse the documents</a>.</div>
+  {{end}}
+{{end}}
+
+{{if eq .Page "search"}}
+  <h2>Search documents</h2>
+  <p class="desc">Full-text ranked search over every chapter. Results link straight to the chapter.</p>
+  <form method="get" action="/search" class="grid">
+    <div class="span2"><label>Query <span class="req">*</span></label><input name="query" value="{{esc .Query}}" placeholder="e.g. fence node, quorum, split brain"></div>
+    <div><label>Product</label><input name="product" value="{{esc .Product}}"></div>
+    <div><label>Version</label><input name="version" value="{{esc .Version}}"></div>
+    <div><label>Limit <span class="hint">default 10</span></label><input name="limit" type="number" min="1" value="{{.Limit}}" placeholder="10"></div>
+    <button class="run" type="submit">Search</button>
+  </form>
+  {{if .Search}}
+    {{if .Search.Hits}}
+      {{range .Search.Hits}}
+        <div class="result-card">
+          <div class="title"><span>{{esc .Title}}</span><span class="score">{{.Score}}</span></div>
+          <div class="meta">
+            <span class="chip prod">{{esc .Document}}</span>
+            <span class="pill">{{esc .DocID}}</span>
+            <span class="pill">{{esc .ChapterID}}</span>
+          </div>
+          {{if .Summary}}<div class="meta" style="margin-top:8px">{{esc .Summary}}</div>{{end}}
+          {{if .Snippet}}<div class="meta" style="margin-top:8px;font-style:italic">&hellip; {{esc .Snippet}} &hellip;</div>{{end}}
+          <div style="margin-top:8px"><a href="/chapter/{{.DocID}}/{{.ChapterID}}">open &rarr;</a></div>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="empty">No results for &ldquo;{{esc .Query}}&rdquo;.</div>
+    {{end}}
+  {{end}}
+{{end}}
+
+{{if eq .Page "command"}}
+  <h2>Find command</h2>
+  <p class="desc">Locate shell commands that contain every given word and the chapters that show them.</p>
+  <form method="get" action="/command" class="grid">
+    <div class="span2"><label>Pattern <span class="req">*</span> <span class="hint">words the command must contain</span></label><input name="pattern" value="{{esc .Pattern}}" placeholder="e.g. crm configure primitive"></div>
+    <button class="run" type="submit">Find</button>
+  </form>
+  {{if .Command}}
+    {{if .Command.Commands}}
+      {{range .Command.Commands}}
+        <div class="cmd-row">
+          <code>{{esc .Command}}</code>
+          <span class="pill">{{esc .DocID}}/{{esc .ChapterID}}</span>
+          <span class="chip prod">{{esc .Title}}</span>
+          <a href="/chapter/{{.DocID}}/{{.ChapterID}}">open &rarr;</a>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="empty">No matching commands found for &ldquo;{{esc .Pattern}}&rdquo;.</div>
+    {{end}}
+  {{end}}
+{{end}}
+
+{{if eq .Page "term"}}
+  <h2>Define term</h2>
+  <p class="desc">Look up a glossary term or abbreviation. Exact match first, then all terms containing the query.</p>
+  <form method="get" action="/term" class="grid">
+    <div class="span2"><label>Term <span class="req">*</span></label><input name="term" value="{{esc .TermQ}}" placeholder="e.g. CIB, split brain, DC"></div>
+    <button class="run" type="submit">Define</button>
+  </form>
+  {{if .Term}}
+    {{if .Term.Entries}}
+      <div class="result-card">
+        <h2 style="margin:0 0 8px">Glossary &middot; {{len .Term.Entries}} entr{{if eq (len .Term.Entries) 1}}y{{else}}ies{{end}}</h2>
+        <dl class="gloss">{{range .Term.Entries}}<dt>{{esc .Term}}</dt><dd>{{esc .WhatIs}}</dd>{{end}}</dl>
+      </div>
+    {{else}}
+      <div class="empty">No glossary entry found for &ldquo;{{esc .TermQ}}&rdquo;.</div>
+    {{end}}
+  {{end}}
+{{end}}
+</main>
+</body>
+</html>
