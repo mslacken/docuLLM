@@ -17,6 +17,15 @@ type Document struct {
 	Distro   Distro    `json:"distro" yaml:"distro"`
 	Chapters []Chapter `json:"chapters" yaml:"chapters"`
 	License  string    `json:"license,omitempty" yaml:"license,omitempty"`
+
+	// DocBook assemblies only; not exposed via MCP
+	Source      *DocSource  `json:"source,omitempty" yaml:"source,omitempty"`
+	Profile     *Profile    `json:"profile,omitempty" yaml:"profile,omitempty"`
+	Subtitle    string      `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	Meta        *DocMeta    `json:"meta,omitempty" yaml:"meta,omitempty"`
+	Revisions   []Revision  `json:"revisions,omitempty" yaml:"revisions,omitempty"`
+	Bugtracker  *Bugtracker `json:"bugtracker,omitempty" yaml:"bugtracker,omitempty"`
+	Translation string      `json:"translation,omitempty" yaml:"translation,omitempty"` // "yes" or "no"
 }
 
 // Distro is the product and versions a document applies to.
@@ -37,6 +46,19 @@ type Chapter struct {
 	Commands   []string `json:"commands,omitempty" yaml:"commands,omitempty"`
 	Terms      []string `json:"terms,omitempty" yaml:"terms,omitempty"` // glossary terms mentioned in the prose
 
+	// DocBook assemblies only; not exposed via MCP
+	TopicType     string       `json:"topic_type,omitempty" yaml:"topic_type,omitempty"` // task, concept, reference, glue or container
+	RenderAs      string       `json:"render_as,omitempty" yaml:"render_as,omitempty"`   // section, appendix, ...
+	Maintainer    string       `json:"maintainer,omitempty" yaml:"maintainer,omitempty"`
+	LegacySources []string     `json:"legacy_sources,omitempty" yaml:"legacy_sources,omitempty"` // "refers to" URLs of the original documentation
+	Sections      []Section    `json:"sections,omitempty" yaml:"sections,omitempty"`
+	Procedures    []Procedure  `json:"procedures,omitempty" yaml:"procedures,omitempty"`
+	Admonitions   []Admonition `json:"admonitions,omitempty" yaml:"admonitions,omitempty"`
+	Xrefs         []Xref       `json:"xrefs,omitempty" yaml:"xrefs,omitempty"`
+	Links         []Link       `json:"links,omitempty" yaml:"links,omitempty"`
+	Images        []Image      `json:"images,omitempty" yaml:"images,omitempty"`
+	Includes      []string     `json:"includes,omitempty" yaml:"includes,omitempty"` // XIncluded snippet files
+
 	source string // key into Corpus.lines
 	prose  string // text outside of code blocks, used for glossary matching and search
 }
@@ -46,7 +68,8 @@ type GlossaryEntry struct {
 	Term   string `json:"term" yaml:"term"`
 	WhatIs string `json:"whatis" yaml:"whatis"`
 
-	match []*regexp.Regexp // one per alias, see glossaryMatchers
+	match   []*regexp.Regexp // one per alias, see glossaryMatchers
+	needles []string         // one per alias, see glossaryNeedles
 }
 
 // segment is one source file. For a combined file (see en-us/combine.sh) every

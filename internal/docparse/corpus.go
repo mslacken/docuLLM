@@ -28,10 +28,20 @@ type Corpus struct {
 // LoadCorpus reads either a single (possibly combined) markdown file or a
 // directory tree of markdown files. In a directory, files that were produced
 // by combine.sh are skipped, as their content is already in the tree.
+// A directory with DC files at its top level is read as DocBook assemblies
+// instead (see docbook.go), as is a single DC file.
 func LoadCorpus(root string) (*Corpus, error) {
 	st, err := os.Stat(root)
 	if err != nil {
 		return nil, err
+	}
+	if !st.IsDir() && strings.HasPrefix(filepath.Base(root), "DC-") {
+		return loadDocBook(filepath.Dir(root), []string{filepath.Base(root)})
+	}
+	if st.IsDir() {
+		if dcs := dcFiles(root); len(dcs) > 0 {
+			return loadDocBook(root, dcs)
+		}
 	}
 	if !st.IsDir() {
 		data, err := os.ReadFile(root)
@@ -133,12 +143,20 @@ func (c *Corpus) finish() {
 	})
 	for i := range c.Glossary {
 		c.Glossary[i].match = glossaryMatchers(c.Glossary[i].Term)
+		c.Glossary[i].needles = glossaryNeedles(c.Glossary[i].Term)
 	}
 	c.df = map[string]int{}
+	// DocBook documents share topics, so the same prose shows up many times
+	terms := map[string][]string{}
 	for d := range c.Documents {
 		for i := range c.Documents[d].Chapters {
 			ch := &c.Documents[d].Chapters[i]
-			ch.Terms = c.termsIn(ch.prose)
+			t, ok := terms[ch.prose]
+			if !ok {
+				t = c.termsIn(ch.prose)
+				terms[ch.prose] = t
+			}
+			ch.Terms = t
 			c.total++
 			seen := map[string]bool{}
 			for _, w := range words(ch.Title + " " + c.Text(ch)) {
@@ -187,11 +205,26 @@ func glossaryMatchers(term string) []*regexp.Regexp {
 	return out
 }
 
+// glossaryNeedles returns the lower case first word of every alias, which a
+// text must contain for the corresponding matcher to match. Checking for it
+// first saves running the (slow) matchers on most texts.
+func glossaryNeedles(term string) []string {
+	var out []string
+	for _, a := range aliases(term) {
+		out = append(out, strings.ToLower(strings.Fields(a)[0]))
+	}
+	return out
+}
+
 // termsIn returns the glossary terms mentioned in text, in glossary order.
 func (c *Corpus) termsIn(text string) []string {
 	var out []string
+	lower := strings.ToLower(text)
 	for _, e := range c.Glossary {
-		for _, re := range e.match {
+		for i, re := range e.match {
+			if i < len(e.needles) && !strings.Contains(lower, e.needles[i]) {
+				continue
+			}
 			if re.MatchString(text) {
 				out = append(out, e.Term)
 				break

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 
 	"docullm/internal/docparse"
@@ -11,21 +13,29 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+var Debug bool
+
+func debugf(format string, args ...any) {
+	if Debug {
+		fmt.Fprintf(os.Stderr, "[debug] tool: "+format+"\n", args...)
+	}
+}
+
 type listDocumentsIn struct {
 	Product string `json:"product,omitempty" jsonschema:"only documents whose product contains this text, e.g. 'High Availability'"`
 	Version string `json:"version,omitempty" jsonschema:"only documents for this product version, e.g. '16.0'"`
 }
 
 type documentInfo struct {
-	ID       string              `json:"id"`
-	Title    string              `json:"title"`
-	Summary  string              `json:"summary"`
-	Distro   docparse.Distro     `json:"distro"`
-	License  string              `json:"license,omitempty"`
-	Chapters int                 `json:"chapters"`
+	ID       string          `json:"id"`
+	Title    string          `json:"title"`
+	Summary  string          `json:"summary"`
+	Distro   docparse.Distro `json:"distro"`
+	License  string          `json:"license,omitempty"`
+	Chapters int             `json:"chapters"`
 }
 
-type listDocumentsOut struct {
+type ListDocumentsOut struct {
 	Documents []documentInfo `json:"documents"`
 }
 
@@ -42,17 +52,17 @@ type tocEntry struct {
 }
 
 type chapterOut struct {
-	ID         string                    `json:"id"`
-	Title      string                    `json:"title"`
-	SourcePath string                    `json:"source_path"`
-	Start      uint                      `json:"start"`
-	End        uint                      `json:"end"`
-	Markdown   string                    `json:"markdown"`
-	Commands   []string                  `json:"commands"`
-	Glossary   []docparse.GlossaryEntry  `json:"glossary"`
+	ID         string                   `json:"id"`
+	Title      string                   `json:"title"`
+	SourcePath string                   `json:"source_path"`
+	Start      uint                     `json:"start"`
+	End        uint                     `json:"end"`
+	Markdown   string                   `json:"markdown"`
+	Commands   []string                 `json:"commands"`
+	Glossary   []docparse.GlossaryEntry `json:"glossary"`
 }
 
-type readDocumentOut struct {
+type ReadDocumentOut struct {
 	documentInfo
 	TOC     []tocEntry  `json:"toc"`
 	Chapter *chapterOut `json:"chapter,omitempty"`
@@ -65,7 +75,7 @@ type searchDocsIn struct {
 	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of hits, default 10"`
 }
 
-type searchDocsOut struct {
+type SearchDocsOut struct {
 	Hits []docparse.SearchHit `json:"hits"`
 }
 
@@ -73,7 +83,7 @@ type findCommandIn struct {
 	Pattern string `json:"pattern" jsonschema:"words the command must contain, e.g. 'crm configure primitive'"`
 }
 
-type findCommandOut struct {
+type FindCommandOut struct {
 	Commands []docparse.CommandHit `json:"commands"`
 }
 
@@ -81,7 +91,7 @@ type defineTermIn struct {
 	Term string `json:"term" jsonschema:"glossary term or abbreviation, e.g. 'CIB' or 'split brain'"`
 }
 
-type defineTermOut struct {
+type DefineTermOut struct {
 	Entries []docparse.GlossaryEntry `json:"entries"`
 }
 
@@ -89,12 +99,12 @@ func info(d *docparse.Document) documentInfo {
 	return documentInfo{ID: d.ID, Title: d.Title, Summary: d.Summary, Distro: d.Distro, License: d.License, Chapters: len(d.Chapters)}
 }
 
-func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (readDocumentOut, error) {
+func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (ReadDocumentOut, error) {
 	doc := c.Document(docID)
 	if doc == nil {
-		return readDocumentOut{}, fmt.Errorf("unknown document %q, use list_documents to get the ids", docID)
+		return ReadDocumentOut{}, fmt.Errorf("unknown document %q, use list_documents to get the ids", docID)
 	}
-	out := readDocumentOut{documentInfo: info(doc), TOC: []tocEntry{}}
+	out := ReadDocumentOut{documentInfo: info(doc), TOC: []tocEntry{}}
 	for _, ch := range doc.Chapters {
 		out.TOC = append(out.TOC, tocEntry{ID: ch.ID, Title: ch.Title, Summary: ch.Summary, Commands: len(ch.Commands)})
 	}
@@ -103,7 +113,7 @@ func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (readDocumen
 	}
 	ch := doc.Chapter(chapterID)
 	if ch == nil {
-		return readDocumentOut{}, fmt.Errorf("unknown chapter %q in document %q", chapterID, docID)
+		return ReadDocumentOut{}, fmt.Errorf("unknown chapter %q in document %q", chapterID, docID)
 	}
 	src := ch.SourcePath
 	if src == "" {
@@ -123,6 +133,84 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
+// ListDocuments returns the documents matching product and version; an empty
+// selector matches everything.
+func ListDocuments(c *docparse.Corpus, product, version string) ListDocumentsOut {
+	out := ListDocumentsOut{Documents: []documentInfo{}}
+	for i := range c.Documents {
+		if c.Documents[i].Matches(product, version) {
+			out.Documents = append(out.Documents, info(&c.Documents[i]))
+		}
+	}
+	return out
+}
+
+// SearchDocs ranks chapters for query, optionally filtered by product/version.
+func SearchDocs(c *docparse.Corpus, query, product, version string, limit int) SearchDocsOut {
+	if limit <= 0 {
+		limit = 10
+	}
+	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, limit))}
+}
+
+// FindCommand returns the documented commands containing every word of pattern.
+func FindCommand(c *docparse.Corpus, pattern string) FindCommandOut {
+	return FindCommandOut{Commands: nonNil(c.FindCommand(pattern))}
+}
+
+// DefineTerm looks up term in the glossary, falling back to partial matches.
+func DefineTerm(c *docparse.Corpus, term string) DefineTermOut {
+	return DefineTermOut{Entries: nonNil(c.DefineTerm(term))}
+}
+
+// corpusSummary is the shape of the corpus overview endpoint.
+type CorpusOverview struct {
+	Documents int      `json:"documents"`
+	Chapters  int      `json:"chapters"`
+	Glossary  int      `json:"glossary"`
+	Products  []string `json:"products"`
+	Versions  []string `json:"versions"`
+	Terms     int      `json:"terms"`
+	Commands  int      `json:"commands"`
+}
+
+// CorpusSummary returns aggregate counts and the distinct product/version
+// values, plus the number of glossary terms and documented commands.
+func CorpusSummary(c *docparse.Corpus) CorpusOverview {
+	s := CorpusOverview{
+		Documents: len(c.Documents),
+		Glossary:  len(c.Glossary),
+		Terms:     len(c.Glossary),
+	}
+	products := map[string]bool{}
+	versions := map[string]bool{}
+	for i := range c.Documents {
+		d := &c.Documents[i]
+		if d.Distro.Product != "" {
+			products[d.Distro.Product] = true
+		}
+		for _, v := range d.Distro.Versions {
+			versions[v] = true
+		}
+		for j := range d.Chapters {
+			s.Chapters++
+			s.Commands += len(d.Chapters[j].Commands)
+		}
+	}
+	s.Products = sortedKeys(products)
+	s.Versions = sortedKeys(versions)
+	return s
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // NewServer builds the MCP server exposing the corpus' documents.
 func NewServer(c *docparse.Corpus) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "docullm", Version: "0.1.0"}, &mcp.ServerOptions{
@@ -134,48 +222,50 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_documents",
 		Description: "List the available documents (guides) with id, title, summary and product versions.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in listDocumentsIn) (*mcp.CallToolResult, listDocumentsOut, error) {
-		out := listDocumentsOut{Documents: []documentInfo{}}
-		for i := range c.Documents {
-			if c.Documents[i].Matches(in.Product, in.Version) {
-				out.Documents = append(out.Documents, info(&c.Documents[i]))
-			}
-		}
-		return nil, out, nil
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in listDocumentsIn) (*mcp.CallToolResult, ListDocumentsOut, error) {
+		debugf("list_documents product=%q version=%q", in.Product, in.Version)
+		return nil, ListDocuments(c, in.Product, in.Version), nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "read_document",
 		Description: "Return a document's metadata and table of contents. If chapter_id is given, also return " +
 			"that chapter's markdown, the commands it shows and the definitions of all glossary terms it mentions.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in readDocumentIn) (*mcp.CallToolResult, readDocumentOut, error) {
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in readDocumentIn) (*mcp.CallToolResult, ReadDocumentOut, error) {
+		debugf("read_document doc_id=%q chapter_id=%q", in.DocID, in.ChapterID)
 		out, err := BuildReadDocument(c, in.DocID, in.ChapterID)
+		debugf("read_document result: %d toc entries, chapter=%v err=%v", len(out.TOC), out.Chapter != nil, err)
 		return nil, out, err
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "search_docs",
 		Description: "Full text search over all chapters. Returns ranked hits with doc_id and chapter_id for read_document.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchDocsIn) (*mcp.CallToolResult, searchDocsOut, error) {
-		limit := in.Limit
-		if limit <= 0 {
-			limit = 10
-		}
-		return nil, searchDocsOut{Hits: nonNil(c.Search(in.Query, in.Product, in.Version, limit))}, nil
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchDocsIn) (*mcp.CallToolResult, SearchDocsOut, error) {
+		debugf("search_docs query=%q product=%q version=%q limit=%d", in.Query, in.Product, in.Version, in.Limit)
+		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit)
+		debugf("search_docs result: %d hits", len(out.Hits))
+		return nil, out, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "find_command",
 		Description: "Find the documented shell commands containing all given words and the chapters showing them.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in findCommandIn) (*mcp.CallToolResult, findCommandOut, error) {
-		return nil, findCommandOut{Commands: nonNil(c.FindCommand(in.Pattern))}, nil
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in findCommandIn) (*mcp.CallToolResult, FindCommandOut, error) {
+		debugf("find_command pattern=%q", in.Pattern)
+		out := FindCommand(c, in.Pattern)
+		debugf("find_command result: %d commands", len(out.Commands))
+		return nil, out, nil
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "define_term",
 		Description: "Look up a term or abbreviation in the glossary.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in defineTermIn) (*mcp.CallToolResult, defineTermOut, error) {
-		return nil, defineTermOut{Entries: nonNil(c.DefineTerm(in.Term))}, nil
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in defineTermIn) (*mcp.CallToolResult, DefineTermOut, error) {
+		debugf("define_term term=%q", in.Term)
+		out := DefineTerm(c, in.Term)
+		debugf("define_term result: %d entries", len(out.Entries))
+		return nil, out, nil
 	})
 
 	addResources(srv, c)
