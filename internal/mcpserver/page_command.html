@@ -1,0 +1,22 @@
+{{define "command"}}
+  <h2>Find command</h2>
+  <p class="desc">Locate shell commands that contain every given word and the chapters that show them.</p>
+  <form method="get" action="/command" class="grid">
+    <div class="span2"><label>Pattern <span class="req">*</span> <span class="hint">words the command must contain</span></label><input name="pattern" value="{{esc .Pattern}}" placeholder="e.g. crm configure primitive"></div>
+    <button class="run" type="submit">Find</button>
+  </form>
+  {{if .Command}}
+    {{if .Command.Commands}}
+      {{range .Command.Commands}}
+        <div class="cmd-row">
+          <code>{{esc .Command}}</code>
+          <span class="pill">{{esc .DocID}}/{{esc .ChapterID}}</span>
+          <span class="chip prod">{{esc .Title}}</span>
+          <a href="/chapter/{{.DocID}}/{{.ChapterID}}">open &rarr;</a>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="empty">No matching commands found for &ldquo;{{esc .Pattern}}&rdquo;.</div>
+    {{end}}
+  {{end}}
+{{end}}

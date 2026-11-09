@@ -1,0 +1,49 @@
+{{define "read"}}
+  {{if .Read}}
+    <div class="result-card">
+      <div class="title">
+        <span>{{esc .Read.Title}}</span>
+      </div>
+      <div class="meta">
+        <span class="chip prod">{{esc .Read.Distro.Product}}{{if .Read.Distro.Versions}} &middot; {{join .Read.Distro.Versions}}{{end}}</span>
+        <span class="chip">{{.Read.Chapters}} chapter{{if ne .Read.Chapters 1}}s{{end}}</span>
+        <span class="pill">{{esc .Read.ID}}</span>
+      </div>
+    </div>
+
+    {{if .Read.TOC}}
+      <div class="result-card">
+        <div class="section-h">Table of contents</div>
+        <ul class="toc">
+          {{range .Read.TOC}}
+            <li>
+              <a href="/chapter/{{$.Read.ID}}/{{.ID}}">{{esc .Title}}{{if .Summary}} <span class="hint">&mdash; {{esc .Summary}}</span>{{end}}</a>
+              <span class="n">{{.Commands}} cmd</span>
+            </li>
+          {{end}}
+        </ul>
+      </div>
+    {{end}}
+
+    {{if .Read.Chapter}}
+      <div class="result-card">
+        <h2 style="margin:0 0 4px">{{esc .Read.Chapter.Title}}</h2>
+        {{if .Read.Chapter.SourcePath}}<div class="meta">source: <code>{{esc .Read.Chapter.SourcePath}}</code> &middot; lines {{.Read.Chapter.Start}}&ndash;{{.Read.Chapter.End}}</div>{{end}}
+        <div class="section-h">Chapter</div>
+        {{.ChapterHTML}}
+        {{if .Read.Chapter.Commands}}
+          <div class="section-h">Commands in this chapter</div>
+          <div class="chips">{{range .Read.Chapter.Commands}}<code>{{esc .}}</code> {{end}}</div>
+        {{end}}
+        {{if .Read.Chapter.Glossary}}
+          <div class="section-h">Glossary terms mentioned</div>
+          <dl class="gloss">{{range .Read.Chapter.Glossary}}<dt>{{esc .Term}}</dt><dd>{{esc .WhatIs}}</dd>{{end}}</dl>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="hint">No chapter selected &mdash; pick one from the table of contents above.</div>
+    {{end}}
+  {{else}}
+    <div class="empty">Unknown document. <a href="/documents">Browse the documents</a>.</div>
+  {{end}}
+{{end}}
