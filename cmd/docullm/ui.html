@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.PageTitle}} — docuLLM</title>
+<title>{{.Title}} — docuLLM</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -108,19 +108,19 @@
 <header>
   <h1>docuLLM</h1>
   <span class="sub">Documentation tools · pure HTML</span>
-  {{if .Summary}}<span class="stats">
-    <span class="stat"><b>{{.Summary.Documents}}</b>docs</span>
-    <span class="stat"><b>{{.Summary.Chapters}}</b>chapters</span>
-    <span class="stat"><b>{{.Summary.Terms}}</b>terms</span>
-    <span class="stat"><b>{{.Summary.Commands}}</b>commands</span>
+  {{with .Summary}}<span class="stats">
+    <span class="stat"><b>{{.Documents}}</b>docs</span>
+    <span class="stat"><b>{{.Chapters}}</b>chapters</span>
+    <span class="stat"><b>{{.Terms}}</b>terms</span>
+    <span class="stat"><b>{{.Commands}}</b>commands</span>
   </span>{{end}}
 </header>
 
 <nav>
-  <a {{if eq .Page "documents"}}class="active"{{end}} href="/documents">Documents</a>
-  <a {{if or (eq .Page "read") (eq .Page "search")}}class="active"{{end}} href="/search">Search</a>
-  <a {{if eq .Page "command"}}class="active"{{end}} href="/command">Find command</a>
-  <a {{if eq .Page "term"}}class="active"{{end}} href="/term">Define term</a>
+  <a {{if eq .Page "list_documents"}}class="active"{{end}} href="/documents">Documents</a>
+  <a {{if or (eq .Page "read_document") (eq .Page "search_docs")}}class="active"{{end}} href="/search">Search</a>
+  <a {{if eq .Page "find_command"}}class="active"{{end}} href="/command">Find command</a>
+  <a {{if eq .Page "define_term"}}class="active"{{end}} href="/term">Define term</a>
 </nav>
 
 <main>
@@ -133,11 +133,11 @@
   </div>
 {{end}}
 
-{{if eq .Page "documents"}}{{template "documents" .}}{{end}}
-{{if eq .Page "read"}}{{template "read" .}}{{end}}
-{{if eq .Page "search"}}{{template "search" .}}{{end}}
-{{if eq .Page "command"}}{{template "command" .}}{{end}}
-{{if eq .Page "term"}}{{template "term" .}}{{end}}
+{{if eq .Page "list_documents"}}{{template "list_documents" .}}{{end}}
+{{if eq .Page "read_document"}}{{template "read_document" .}}{{end}}
+{{if eq .Page "search_docs"}}{{template "search_docs" .}}{{end}}
+{{if eq .Page "find_command"}}{{template "find_command" .}}{{end}}
+{{if eq .Page "define_term"}}{{template "define_term" .}}{{end}}
 </main>
 </body>
 </html>

@@ -1,0 +1,41 @@
+{{define "list_documents"}}
+  <h2>List documents</h2>
+  <p class="desc">All guides with id, title, product and versions. Filter by product name or version.</p>
+  <form method="get" action="/documents" class="grid">
+    <div><label>Product <span class="hint">one present in the corpus</span></label>
+      <select name="product">
+        <option value=""{{if eq .Args.product ""}} selected{{end}}>All</option>
+        {{range enum "list_documents" "product"}}<option value="{{esc .}}" {{if eq . $.Args.product}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
+    <div><label>Version <span class="hint">one present in the corpus</span></label>
+      <select name="version">
+        <option value=""{{if eq .Args.version ""}} selected{{end}}>All</option>
+        {{range enum "list_documents" "version"}}<option value="{{esc .}}" {{if eq . $.Args.version}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
+    <button class="run" type="submit">List</button>
+  </form>
+  {{with tool "list_documents" .Args}}
+    {{if .Error}}
+      <div class="empty">{{.Error}}</div>
+    {{else if .Out.documents}}
+      {{range .Out.documents}}
+        <div class="result-card">
+          <div class="title">
+            <span>{{esc (clean .title .distro .product)}}</span>
+            <a href="/document/{{.id}}">Read &rarr;</a>
+          </div>
+          <div class="meta">
+            {{if .distro.name}}<span class="cat">Distro: <b>{{esc .distro.name}}</b></span>{{range .distro.versions}}<span class="badge">{{esc .}}</span>{{end}}{{end}}
+            {{if .product.name}}<span class="cat">Product: <b>{{esc .product.name}}</b></span>{{range .product.versions}}<span class="badge">{{esc .}}</span>{{end}}{{end}}
+            <span class="chip">{{.chapters}} chapter{{if ne (str .chapters) "1"}}s{{end}}</span>
+            <span class="pill">{{esc .id}}</span>
+          </div>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="empty">No documents match this filter.</div>
+    {{end}}
+  {{end}}
+{{end}}

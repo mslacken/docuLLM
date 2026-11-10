@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html"
 	"html/template"
@@ -40,64 +41,51 @@ func distroPart(p string) *regexp.Regexp {
 	return regexp.MustCompile(`\b` + regexp.QuoteMeta(p) + `\b`)
 }
 
-// pages holds the per-tool page templates. They live here, next to the tools
-// they render, while the global page chrome (header, nav, styles, index) stays
-// in the command's own ui.html shell.
+// pages holds the per-tool page templates, one per MCP tool and named after
+// it. They live here, next to the tools they render, while the global page
+// chrome (header, nav, styles, index) stays in the command's own ui.html shell.
+// A page template calls its tool itself (via the web interface's "tool"
+// function) and renders the tool's structured output, so the field names in
+// the templates are exactly the JSON names an MCP client sees.
 //
-//go:embed page_documents.html
-//go:embed page_read.html
-//go:embed page_search.html
-//go:embed page_command.html
-//go:embed page_term.html
+//go:embed list_documents.html
+//go:embed read_document.html
+//go:embed search_docs.html
+//go:embed find_command.html
+//go:embed define_term.html
 var pages embed.FS
+
+// PageNames are the page templates in PageTemplates, which are also the names
+// of the tools they render.
+var PageNames = []string{"list_documents", "read_document", "search_docs", "find_command", "define_term"}
 
 // PageTemplates returns the file system holding the per-tool page templates,
 // so the command can parse them into the same template set as its shell.
 func PageTemplates() embed.FS { return pages }
 
-// PageData is the shared data every web page is rendered with. Fields are the
-// union of what the global chrome and the individual tool pages need; each tool
-// fills in only its own block via its Build*PageData helper.
-type PageData struct {
-	// global chrome
-	Page      string
-	PageTitle string
-	Summary   *CorpusOverview
-	Products  []string
-	Versions  []string
-
-	// documents
-	Product string
-	Version string
-	Docs    *ListDocumentsOut
-
-	// read
-	Read        *ReadDocumentOut
-	ChapterHTML template.HTML
-
-	// search
-	Query  string
-	Limit  int
-	Search *SearchDocsOut
-
-	// command
-	Pattern string
-	Command *FindCommandOut
-
-	// term
-	TermQ string
-	Term  *DefineTermOut
-}
-
 // PageFuncs returns the template functions shared by the shell and the page
 // templates. esc avoids double-escaping the already-trusted chapter HTML.
+// clean and markdown take the JSON-decoded tool output.
 func PageFuncs() template.FuncMap {
 	return template.FuncMap{
-		"esc":   func(s any) template.HTML { return template.HTML(escText(s)) },
-		"join":  func(ss []string) string { return strings.Join(ss, ", ") },
-		"str":   func(v any) string { return fmt.Sprint(v) },
-		"clean": func(title string, d docparse.Distro, p docparse.Product) string { return CleanTitle(title, d, p) },
+		"esc":  func(s any) template.HTML { return template.HTML(escText(s)) },
+		"join": func(ss []string) string { return strings.Join(ss, ", ") },
+		"str":  func(v any) string { return fmt.Sprint(v) },
+		"clean": func(title string, d, p any) string {
+			return CleanTitle(title, decodeAs[docparse.Distro](d), decodeAs[docparse.Product](p))
+		},
+		"markdown": func(md string) template.HTML { return markdownToHTML(md) },
 	}
+}
+
+// decodeAs converts a JSON-decoded value (e.g. a map from a tool's structured
+// output) back into T. Values that do not fit leave T at its zero value.
+func decodeAs[T any](v any) T {
+	var t T
+	if b, err := json.Marshal(v); err == nil {
+		_ = json.Unmarshal(b, &t)
+	}
+	return t
 }
 
 // markdownToHTML renders a chapter's markdown to standalone HTML using the same

@@ -1,11 +1,12 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"docullm/internal/docparse"
-	"docullm/internal/mcpserver"
 )
 
 // sampleCorpus is a small corpus with one document (two chapters, a command)
@@ -56,50 +57,78 @@ func buildCorpus() *docparse.Corpus {
 	return docparse.BuildDocuments(docparse.SplitSources([]byte(sampleCorpus), "combined.md"))
 }
 
-// TestWebPagesRender executes the global ui.html shell together with each tool's
-// page template and builder, asserting the page renders without error and
-// contains the expected output. This is the integration the refactor depends on.
+// TestWebPagesRender requests every page through the web handler, so the
+// global ui.html shell, each tool's page template and the in-memory MCP tool
+// call behind it are exercised together, and asserts the expected output.
 func TestWebPagesRender(t *testing.T) {
-	tmpl, err := newTemplate()
-	if err != nil {
-		t.Fatalf("newTemplate: %v", err)
-	}
-	c := buildCorpus()
+	h := serveWeb(buildCorpus())
 
 	cases := []struct {
 		name string
-		data mcpserver.PageData
+		url  string
 		want []string
 	}{
-		{"index", mcpserver.BuildIndexPageData(c), []string{"/documents", "/search", "/command", "/term"}},
-		{"documents", mcpserver.BuildListDocumentsPageData(c, "", ""), []string{"Guide", "Sample Product", "Read &rarr;", `<option value="" selected>All</option>`}},
-		{"documents-filter", mcpserver.BuildListDocumentsPageData(c, "Nope", ""), []string{"No documents match", `<option value="">All</option>`}},
-		{"documents-version", mcpserver.BuildListDocumentsPageData(c, "", "1.0"), []string{`<option value="">All</option>`}},
-		{"read-toc", mcpserver.BuildReadDocumentPageData(c, "guide", ""), []string{"Guide", "Table of contents", "Setup", "Quorum"}},
-		{"read-chapter", mcpserver.BuildReadDocumentPageData(c, "guide", "setup"), []string{"crm configure show", "CIB", "Commands in this chapter"}},
-		{"read-unknown", mcpserver.BuildReadDocumentPageData(c, "nope", ""), []string{"Unknown document"}},
-		{"search", mcpserver.BuildSearchPageData(c, "quorum", "", "", 10), []string{"quorum", "open &rarr;"}},
-		{"search-empty", mcpserver.BuildSearchPageData(c, "", "", "", 10), []string{"Search documents"}},
-		{"command", mcpserver.BuildFindCommandPageData(c, "crm configure"), []string{"crm configure show"}},
-		{"command-empty", mcpserver.BuildFindCommandPageData(c, "zzz"), []string{"No matching commands"}},
-		{"term", mcpserver.BuildDefineTermPageData(c, "CIB"), []string{"cluster information base", "The cluster configuration."}},
-		{"term-empty", mcpserver.BuildDefineTermPageData(c, "zzz"), []string{"No glossary entry"}},
+		{"index", "/", []string{"/documents", "/search", "/command", "/term"}},
+		{"documents", "/documents", []string{"Guide", "Sample Product", "Read &rarr;", `<option value="" selected>All</option>`}},
+		{"documents-filter", "/documents?product=Nope", []string{"validating", `<option value="">All</option>`}},
+		{"documents-version", "/documents?version=1.0", []string{`<option value="">All</option>`, `<option value="1.0" selected>`}},
+		{"read-toc", "/document/guide", []string{"Guide", "Table of contents", "Setup", "Quorum", "/chapter/guide/setup"}},
+		{"read-chapter", "/chapter/guide/setup", []string{"crm configure show", "CIB", "Commands in this chapter"}},
+		{"read-unknown", "/document/nope", []string{"unknown document", "Browse the documents"}},
+		{"search", "/search?query=quorum&limit=10", []string{"quorum", "open &rarr;"}},
+		{"search-empty", "/search", []string{"Search documents"}},
+		{"command", "/command?pattern=crm+configure", []string{"crm configure show"}},
+		{"command-empty", "/command?pattern=zzz", []string{"No matching commands"}},
+		{"term", "/term?term=CIB", []string{"cluster information base", "The cluster configuration."}},
+		{"term-empty", "/term?term=zzz", []string{"No glossary entry"}},
 	}
 
 	for _, tc := range cases {
-		var b strings.Builder
-		if err := tmpl.ExecuteTemplate(&b, "ui.html", tc.data); err != nil {
-			t.Errorf("%s: render error: %v", tc.name, err)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", tc.url, nil))
+		out := rec.Body.String()
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: status %d: %s", tc.name, rec.Code, out)
 			continue
 		}
-		out := b.String()
 		for _, w := range tc.want {
 			if !strings.Contains(out, w) {
 				t.Errorf("%s: output missing %q\n---\n%s", tc.name, w, out)
 			}
 		}
+		if strings.Contains(out, "no value") {
+			t.Errorf("%s: output contains a missing template value", tc.name)
+		}
 		if !strings.Contains(out, "<!doctype html>") || !strings.Contains(out, "<header>") {
 			t.Errorf("%s: missing global chrome (doctype/header)", tc.name)
+		}
+	}
+}
+
+// TestWebAPI checks the JSON API returns the tools' structured output and
+// reports tool errors (like a missing required argument) as bad requests.
+func TestWebAPI(t *testing.T) {
+	h := serveWeb(buildCorpus())
+
+	cases := []struct {
+		url    string
+		status int
+		want   string
+	}{
+		{"/api/list_documents", http.StatusOK, `"id": "guide"`},
+		{"/api/read_document?doc_id=guide&chapter_id=setup", http.StatusOK, `"markdown"`},
+		{"/api/read_document", http.StatusBadRequest, "doc_id"},
+		{"/api/search_docs?query=quorum&limit=1", http.StatusOK, `"hits"`},
+		{"/api/find_command?pattern=crm", http.StatusOK, "crm configure show"},
+		{"/api/define_term?term=CIB", http.StatusOK, "cluster information base"},
+		{"/api/corpus", http.StatusOK, `"documents": 1`},
+		{"/api/nope", http.StatusNotFound, "unknown tool"},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", tc.url, nil))
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("%s: got %d %q, want %d containing %q", tc.url, rec.Code, rec.Body.String(), tc.status, tc.want)
 		}
 	}
 }

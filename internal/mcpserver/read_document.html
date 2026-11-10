@@ -1,0 +1,52 @@
+{{define "read_document"}}
+  {{with tool "read_document" .Args}}
+  {{if .Error}}
+    <div class="empty">{{.Error}} <a href="/documents">Browse the documents</a>.</div>
+  {{else}}{{with .Out}}{{$doc := .}}
+    <div class="result-card">
+      <div class="title">
+        <span>{{esc (clean .title .distro .product)}}</span>
+      </div>
+      <div class="meta">
+        {{if .distro.name}}<span class="cat">Distro: <b>{{esc .distro.name}}</b></span>{{range .distro.versions}}<span class="badge">{{esc .}}</span>{{end}}{{end}}
+        {{if .product.name}}<span class="cat">Product: <b>{{esc .product.name}}</b></span>{{range .product.versions}}<span class="badge">{{esc .}}</span>{{end}}{{end}}
+        <span class="chip">{{.chapters}} chapter{{if ne (str .chapters) "1"}}s{{end}}</span>
+        <span class="pill">{{esc .id}}</span>
+      </div>
+    </div>
+
+    {{if .toc}}
+      <div class="result-card">
+        <div class="section-h">Table of contents</div>
+        <ul class="toc">
+          {{range .toc}}
+            <li>
+              <a href="/chapter/{{$doc.id}}/{{.id}}">{{esc .title}}{{if .summary}} <span class="hint">&mdash; {{esc .summary}}</span>{{end}}</a>
+              <span class="n">{{.commands}} cmd</span>
+            </li>
+          {{end}}
+        </ul>
+      </div>
+    {{end}}
+
+    {{with .chapter}}
+      <div class="result-card">
+        <h2 style="margin:0 0 4px">{{esc .title}}</h2>
+        {{if .source_path}}<div class="meta">source: <code>{{esc .source_path}}</code> &middot; lines {{.start}}&ndash;{{.end}}</div>{{end}}
+        <div class="section-h">Chapter</div>
+        {{markdown .markdown}}
+        {{if .commands}}
+          <div class="section-h">Commands in this chapter</div>
+          <div class="chips">{{range .commands}}<code>{{esc .}}</code> {{end}}</div>
+        {{end}}
+        {{if .glossary}}
+          <div class="section-h">Glossary terms mentioned</div>
+          <dl class="gloss">{{range .glossary}}<dt>{{esc .term}}</dt><dd>{{esc .whatis}}</dd>{{end}}</dl>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="hint">No chapter selected &mdash; pick one from the table of contents above.</div>
+    {{end}}
+  {{end}}{{end}}
+  {{end}}
+{{end}}

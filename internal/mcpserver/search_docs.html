@@ -1,0 +1,42 @@
+{{define "search_docs"}}
+  <h2>Search documents</h2>
+  <p class="desc">Full-text ranked search over every chapter. Results link straight to the chapter.</p>
+  <form method="get" action="/search" class="grid">
+    <div class="span2"><label>Query <span class="req">*</span></label><input name="query" value="{{esc .Args.query}}" placeholder="e.g. fence node, quorum, split brain"></div>
+    <div><label>Product <span class="hint">one present in the corpus</span></label>
+      <select name="product">
+        <option value=""{{if eq .Args.product ""}} selected{{end}}>All</option>
+        {{range enum "search_docs" "product"}}<option value="{{esc .}}" {{if eq . $.Args.product}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
+    <div><label>Version <span class="hint">one present in the corpus</span></label>
+      <select name="version">
+        <option value=""{{if eq .Args.version ""}} selected{{end}}>All</option>
+        {{range enum "search_docs" "version"}}<option value="{{esc .}}" {{if eq . $.Args.version}}selected{{end}}>{{esc .}}</option>{{end}}
+      </select>
+    </div>
+    <div><label>Limit <span class="hint">default 10</span></label><input name="limit" type="number" min="1" value="{{.Args.limit}}" placeholder="10"></div>
+    <button class="run" type="submit">Search</button>
+  </form>
+  {{if .Args.query}}{{with tool "search_docs" .Args}}
+    {{if .Error}}
+      <div class="empty">{{.Error}}</div>
+    {{else if .Out.hits}}
+      {{range .Out.hits}}
+        <div class="result-card">
+          <div class="title"><span>{{esc .chapter_title}}</span><span class="score">{{.score}}</span></div>
+          <div class="meta">
+            <span class="chip prod">{{esc .document}}</span>
+            <span class="pill">{{esc .doc_id}}</span>
+            <span class="pill">{{esc .chapter_id}}</span>
+          </div>
+          {{if .summary}}<div class="meta" style="margin-top:8px">{{esc .summary}}</div>{{end}}
+          {{if .snippet}}<div class="meta" style="margin-top:8px;font-style:italic">&hellip; {{esc .snippet}} &hellip;</div>{{end}}
+          <div style="margin-top:8px"><a href="/chapter/{{.doc_id}}/{{.chapter_id}}">open &rarr;</a></div>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="empty">No results for &ldquo;{{esc $.Args.query}}&rdquo;.</div>
+    {{end}}
+  {{end}}{{end}}
+{{end}}

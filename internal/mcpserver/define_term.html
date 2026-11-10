@@ -1,0 +1,20 @@
+{{define "define_term"}}
+  <h2>Define term</h2>
+  <p class="desc">Look up a glossary term or abbreviation. Exact match first, then all terms containing the query.</p>
+  <form method="get" action="/term" class="grid">
+    <div class="span2"><label>Term <span class="req">*</span></label><input name="term" value="{{esc .Args.term}}" placeholder="e.g. CIB, split brain, DC"></div>
+    <button class="run" type="submit">Define</button>
+  </form>
+  {{if .Args.term}}{{with tool "define_term" .Args}}
+    {{if .Error}}
+      <div class="empty">{{.Error}}</div>
+    {{else if .Out.entries}}
+      <div class="result-card">
+        <h2 style="margin:0 0 8px">Glossary &middot; {{len .Out.entries}} entr{{if eq (len .Out.entries) 1}}y{{else}}ies{{end}}</h2>
+        <dl class="gloss">{{range .Out.entries}}<dt>{{esc .term}}</dt><dd>{{esc .whatis}}</dd>{{end}}</dl>
+      </div>
+    {{else}}
+      <div class="empty">No glossary entry found for &ldquo;{{esc $.Args.term}}&rdquo;.</div>
+    {{end}}
+  {{end}}{{end}}
+{{end}}
