@@ -140,11 +140,15 @@ func (a *webApp) callTool(name string, args map[string]string) toolResult {
 		if v == "" {
 			continue
 		}
-		if schema.Properties[k].Type == "integer" {
+		switch schema.Properties[k].Type {
+		case "integer":
 			if n, err := strconv.Atoi(v); err == nil {
 				in[k] = n
 				continue
 			}
+		case "boolean":
+			in[k] = true // a checked checkbox submits "on"
+			continue
 		}
 		in[k] = v
 	}

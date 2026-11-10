@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/hbollon/go-edlib"
 )
 
 // Corpus is the set of all parsed documents together with the merged glossary
@@ -215,9 +217,32 @@ type SearchHit struct {
 	Score     float64 `json:"score"`
 }
 
-// Search ranks chapters by tf-idf of the query words over the chapter text,
-// with matches in the chapter title and summary weighted higher.
-func (c *Corpus) Search(query, product, version string, limit int) []SearchHit {
+// Search ranks chapters for query, optionally filtered by product and version,
+// keeping at most limit hits (0 = no limit).
+//
+// By default the query is split into words and each word is scored against
+// every chapter. A word matches corpus words within fuzzy edits of it (fuzzy
+// 0 = exact only, 1 = a single typo, 2 = two). Chapters are ranked by the
+// tf-idf of the matched words; an exact hit in the title or summary outweighs
+// a hit in the body; and chapters matching all of the query words rank above
+// those matching only some.
+//
+// If regex is set, the query is instead a regular expression (RE2 syntax)
+// matched against each chapter's title, summary and text, and the matching
+// chapters are returned in document order.
+func (c *Corpus) Search(query, product, version string, limit, fuzzy int, regex bool) []SearchHit {
+	if fuzzy < 0 {
+		fuzzy = 0
+	}
+	if regex {
+		return c.searchRegex(query, product, version, limit)
+	}
+	return c.searchWords(query, product, version, limit, fuzzy)
+}
+
+// searchWords scores each chapter that passes the product/version filter by
+// how well the words of query match it, and returns them best first.
+func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int) []SearchHit {
 	q := words(query)
 	if len(q) == 0 {
 		return nil
@@ -230,30 +255,11 @@ func (c *Corpus) Search(query, product, version string, limit int) []SearchHit {
 		}
 		for i := range doc.Chapters {
 			ch := &doc.Chapters[i]
-			text := c.Text(ch)
-			tf := map[string]int{}
-			for _, w := range words(text) {
-				tf[w]++
+			raw := c.Text(ch)
+			score, matched := c.chapterScore(raw, words(ch.Title), words(ch.Summary), q, fuzzy)
+			if matched > 0 {
+				hits = append(hits, newSearchHit(doc, ch, raw, q, score))
 			}
-			title, summary := words(ch.Title), words(ch.Summary)
-			score, found := 0.0, 0
-			for _, w := range q {
-				idf := math.Log(1 + float64(c.total)/float64(1+c.df[w]))
-				s := math.Log(1+float64(tf[w])) + 3*float64(count(title, w)) + float64(count(summary, w))
-				if s > 0 {
-					found++
-				}
-				score += s * idf
-			}
-			if found == 0 {
-				continue
-			}
-			// prefer chapters that contain all of the query words
-			score *= float64(found) / float64(len(q))
-			hits = append(hits, SearchHit{
-				DocID: doc.ID, ChapterID: ch.ID, Document: doc.Title, Title: ch.Title,
-				Summary: ch.Summary, Snippet: snippet(text, q), Score: math.Round(score*100) / 100,
-			})
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
@@ -261,6 +267,83 @@ func (c *Corpus) Search(query, product, version string, limit int) []SearchHit {
 		hits = hits[:limit]
 	}
 	return hits
+}
+
+// chapterScore returns the tf-idf score of a chapter for the query words q and
+// the number of those words it matched. The total is scaled by the fraction of
+// query words matched, so a chapter containing all of them ranks above one
+// containing only some.
+func (c *Corpus) chapterScore(raw string, title, summary []string, q []string, fuzzy int) (score float64, matched int) {
+	text := words(raw)
+	for _, w := range q {
+		s := c.wordScore(text, title, summary, w, fuzzy)
+		if s > 0 {
+			matched++
+		}
+		score += s
+	}
+	if matched > 0 {
+		score *= float64(matched) / float64(len(q))
+	}
+	return score, matched
+}
+
+// wordScore is the tf-idf contribution of one query word w: idf(w) times the
+// log of the number of (fuzzy) matches of w in the chapter text, with an exact
+// match in the title counted three times and in the summary counted once.
+func (c *Corpus) wordScore(text, title, summary []string, w string, fuzzy int) float64 {
+	idf := math.Log(1 + float64(c.total) / float64(1+c.df[w]))
+	tf := math.Log(1 + float64(fuzzyCount(text, w, fuzzy)))
+	return (tf + 3*float64(count(title, w)) + float64(count(summary, w))) * idf
+}
+
+// newSearchHit assembles the hit for chapter ch of document doc.
+func newSearchHit(doc *Document, ch *Chapter, raw string, q []string, score float64) SearchHit {
+	return SearchHit{
+		DocID: doc.ID, ChapterID: ch.ID, Document: doc.Title, Title: ch.Title,
+		Summary: ch.Summary, Snippet: snippet(raw, q), Score: math.Round(score*100) / 100,
+	}
+}
+
+// searchRegex matches the regular expression query against each chapter's
+// title, summary and text and returns the hits in document order. An invalid
+// pattern yields no hits.
+func (c *Corpus) searchRegex(query, product, version string, limit int) []SearchHit {
+	re, err := regexp.Compile(query)
+	if err != nil {
+		return nil
+	}
+	var hits []SearchHit
+	for d := range c.Documents {
+		doc := &c.Documents[d]
+		if !doc.Matches(product, version) {
+			continue
+		}
+		for i := range doc.Chapters {
+			ch := &doc.Chapters[i]
+			raw := c.Text(ch)
+			if re.MatchString(ch.Title) || re.MatchString(ch.Summary) || re.MatchString(raw) {
+				hits = append(hits, newSearchHit(doc, ch, raw, words(query), 0))
+			}
+			if limit > 0 && len(hits) >= limit {
+				return hits
+			}
+		}
+	}
+	return hits
+}
+
+// fuzzyCount counts the words within fuzzy edits of w. A distance of 0 counts
+// only exact matches (the same as the word frequency), 1 also a single
+// character typo, 2 also two.
+func fuzzyCount(text []string, w string, fuzzy int) int {
+	n := 0
+	for _, v := range text {
+		if edlib.LevenshteinDistance(w, v) <= fuzzy {
+			n++
+		}
+	}
+	return n
 }
 
 func count(list []string, s string) int {

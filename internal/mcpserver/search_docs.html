@@ -16,6 +16,10 @@
       </select>
     </div>
     <div><label>Limit <span class="hint">default 10</span></label><input name="limit" type="number" min="1" value="{{.Args.limit}}" placeholder="10"></div>
+    <div><label>Fuzzy <span class="hint">max typos, 0 = exact, default 1</span></label><input name="fuzzy" type="number" min="0" max="3" value="{{if .Args.fuzzy}}{{.Args.fuzzy}}{{else}}1{{end}}"></div>
+    <div><label>Regex <span class="hint">match the query as a pattern</span></label>
+      <label class="check"><input type="checkbox" name="regex" value="on"{{if .Args.regex}} checked{{end}}> treat query as a regular expression</label>
+    </div>
     <button class="run" type="submit">Search</button>
   </form>
   {{if .Args.query}}{{with tool "search_docs" .Args}}

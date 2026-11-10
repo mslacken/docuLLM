@@ -77,6 +77,7 @@ func TestWebPagesRender(t *testing.T) {
 		{"read-chapter", "/chapter/guide/setup", []string{"crm configure show", "CIB", "Commands in this chapter"}},
 		{"read-unknown", "/document/nope", []string{"unknown document", "Browse the documents"}},
 		{"search", "/search?query=quorum&limit=10", []string{"quorum", "open &rarr;"}},
+		{"search-regex", "/search?query=bra&regex=on", []string{"Quorum", "open &rarr;", `name="regex" value="on" checked`}},
 		{"search-empty", "/search", []string{"Search documents"}},
 		{"command", "/command?pattern=crm+configure", []string{"crm configure show"}},
 		{"command-empty", "/command?pattern=zzz", []string{"No matching commands"}},

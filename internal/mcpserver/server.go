@@ -73,6 +73,8 @@ type searchDocsIn struct {
 	Product string `json:"product,omitempty" jsonschema:"only documents whose product contains this text"`
 	Version string `json:"version,omitempty" jsonschema:"only documents for this product version"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of hits, default 10"`
+	Fuzzy   int    `json:"fuzzy,omitempty" jsonschema:"maximum edit distance for a word to still match, default 1 (0 disables fuzzy)"`
+	Regex   bool   `json:"regex,omitempty" jsonschema:"treat query as a regular expression instead of words"`
 }
 
 type SearchDocsOut struct {
@@ -146,11 +148,13 @@ func ListDocuments(c *docparse.Corpus, product, version string) ListDocumentsOut
 }
 
 // SearchDocs ranks chapters for query, optionally filtered by product/version.
-func SearchDocs(c *docparse.Corpus, query, product, version string, limit int) SearchDocsOut {
+// fuzzy is the maximum edit distance allowed for a word match; regex treats the
+// query as a regular expression.
+func SearchDocs(c *docparse.Corpus, query, product, version string, limit, fuzzy int, regex bool) SearchDocsOut {
 	if limit <= 0 {
 		limit = 10
 	}
-	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, limit))}
+	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, limit, fuzzy, regex))}
 }
 
 // FindCommand returns the documented commands containing every word of pattern.
@@ -280,8 +284,8 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 		Description: "Full text search over all chapters. Returns ranked hits with doc_id and chapter_id for read_document.",
 		InputSchema: CreateSearchDocsSchema(c),
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchDocsIn) (*mcp.CallToolResult, SearchDocsOut, error) {
-		debugf("search_docs query=%q product=%q version=%q limit=%d", in.Query, in.Product, in.Version, in.Limit)
-		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit)
+		debugf("search_docs query=%q product=%q version=%q limit=%d fuzzy=%d regex=%v", in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex)
+		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex)
 		debugf("search_docs result: %d hits", len(out.Hits))
 		return nil, out, nil
 	})

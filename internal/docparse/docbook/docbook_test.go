@@ -369,8 +369,11 @@ func TestDocBookCorpus(t *testing.T) {
 	if hits := c.FindCommand("zypper"); len(hits) != 2 {
 		t.Errorf("find zypper = %+v", hits)
 	}
-	if hits := c.Search("reboot", "for SAP", "", 0); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+	if hits := c.Search("reboot", "for SAP", "", 0, 1, false); len(hits) != 1 || hits[0].DocID != "sap-demo" {
 		t.Errorf("search = %+v", hits)
+	}
+	if hits := c.Search("rebo.", "for SAP", "", 0, 0, true); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+		t.Errorf("regex search = %+v", hits)
 	}
 }
 
