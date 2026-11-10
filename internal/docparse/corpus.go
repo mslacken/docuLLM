@@ -267,7 +267,7 @@ func (c *Corpus) Text(ch *Chapter) string {
 // Matches reports whether the document applies to product and version. An empty
 // selector matches everything.
 func (d *Document) Matches(product, version string) bool {
-	if product != "" && !strings.Contains(strings.ToLower(d.Distro.Product), strings.ToLower(product)) {
+	if product != "" && !strings.Contains(strings.ToLower(d.Distro.Name), strings.ToLower(product)) {
 		return false
 	}
 	return version == "" || contains(d.Distro.Versions, version)

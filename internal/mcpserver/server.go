@@ -28,10 +28,11 @@ type listDocumentsIn struct {
 }
 
 type documentInfo struct {
-	ID       string          `json:"id"`
-	Title    string          `json:"title"`
-	Distro   docparse.Distro `json:"distro"`
-	Chapters int             `json:"chapters"`
+	ID       string           `json:"id"`
+	Title    string           `json:"title"`
+	Distro   docparse.Distro  `json:"distro"`
+	Product  docparse.Product `json:"product,omitempty"`
+	Chapters int              `json:"chapters"`
 }
 
 type ListDocumentsOut struct {
@@ -95,7 +96,7 @@ type DefineTermOut struct {
 }
 
 func info(d *docparse.Document) documentInfo {
-	return documentInfo{ID: d.ID, Title: d.Title, Distro: d.Distro, Chapters: len(d.Chapters)}
+	return documentInfo{ID: d.ID, Title: d.Title, Distro: d.Distro, Product: d.Product, Chapters: len(d.Chapters)}
 }
 
 func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (ReadDocumentOut, error) {
@@ -185,8 +186,8 @@ func CorpusSummary(c *docparse.Corpus) CorpusOverview {
 	versions := map[string]bool{}
 	for i := range c.Documents {
 		d := &c.Documents[i]
-		if d.Distro.Product != "" {
-			products[d.Distro.Product] = true
+		if d.Distro.Name != "" {
+			products[d.Distro.Name] = true
 		}
 		for _, v := range d.Distro.Versions {
 			versions[v] = true

@@ -2,10 +2,11 @@
   {{if .Read}}
     <div class="result-card">
       <div class="title">
-        <span>{{esc .Read.Title}}</span>
+        <span>{{esc (clean .Read.Title .Read.Distro .Read.Product)}}</span>
       </div>
       <div class="meta">
-        <span class="chip prod">{{esc .Read.Distro.Product}}{{if .Read.Distro.Versions}} &middot; {{join .Read.Distro.Versions}}{{end}}</span>
+        {{if .Read.Distro.Name}}<span class="cat">Distro: <b>{{esc .Read.Distro.Name}}</b></span>{{range .Read.Distro.Versions}}<span class="badge">{{esc .}}</span>{{end}}{{end}}
+        {{if .Read.Product.Name}}<span class="cat">Product: <b>{{esc .Read.Product.Name}}</b></span>{{range .Read.Product.Versions}}<span class="badge">{{esc .}}</span>{{end}}{{end}}
         <span class="chip">{{.Read.Chapters}} chapter{{if ne .Read.Chapters 1}}s{{end}}</span>
         <span class="pill">{{esc .Read.ID}}</span>
       </div>

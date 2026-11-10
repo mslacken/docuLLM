@@ -5,11 +5,40 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"docullm/internal/docparse"
+
 	"github.com/gomarkdown/markdown"
 )
+
+var reSpace = regexp.MustCompile(`\s+`)
+
+// CleanTitle strips the distro and product names and versions from a document
+// title, so the UI can present them as their own categories instead of baking
+// them into the title.
+func CleanTitle(title string, d docparse.Distro, p docparse.Product) string {
+	s := title
+	if d.Name != "" {
+		s = distroPart(d.Name).ReplaceAllString(s, " ")
+	}
+	for _, v := range d.Versions {
+		s = distroPart(v).ReplaceAllString(s, " ")
+	}
+	if p.Name != "" {
+		s = distroPart(p.Name).ReplaceAllString(s, " ")
+	}
+	for _, v := range p.Versions {
+		s = distroPart(v).ReplaceAllString(s, " ")
+	}
+	return strings.TrimSpace(reSpace.ReplaceAllString(s, " "))
+}
+
+func distroPart(p string) *regexp.Regexp {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(p) + `\b`)
+}
 
 // pages holds the per-tool page templates. They live here, next to the tools
 // they render, while the global page chrome (header, nav, styles, index) stays
@@ -64,9 +93,10 @@ type PageData struct {
 // templates. esc avoids double-escaping the already-trusted chapter HTML.
 func PageFuncs() template.FuncMap {
 	return template.FuncMap{
-		"esc":  func(s any) template.HTML { return template.HTML(escText(s)) },
-		"join": func(ss []string) string { return strings.Join(ss, ", ") },
-		"str":  func(v any) string { return fmt.Sprint(v) },
+		"esc":   func(s any) template.HTML { return template.HTML(escText(s)) },
+		"join":  func(ss []string) string { return strings.Join(ss, ", ") },
+		"str":   func(v any) string { return fmt.Sprint(v) },
+		"clean": func(title string, d docparse.Distro, p docparse.Product) string { return CleanTitle(title, d, p) },
 	}
 }
 

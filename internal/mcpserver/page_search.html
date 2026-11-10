@@ -5,13 +5,13 @@
     <div class="span2"><label>Query <span class="req">*</span></label><input name="query" value="{{esc .Query}}" placeholder="e.g. fence node, quorum, split brain"></div>
     <div><label>Product <span class="hint">one present in the corpus</span></label>
       <select name="product">
-        <option value="" {{if eq (str .Product) ""}}selected{{end}}></option>
+        <option value=""{{if eq (str .Product) ""}} selected{{end}}>All</option>
         {{range .Products}}<option value="{{esc .}}" {{if eq (str .) (str $.Product)}}selected{{end}}>{{esc .}}</option>{{end}}
       </select>
     </div>
     <div><label>Version <span class="hint">one present in the corpus</span></label>
       <select name="version">
-        <option value="" {{if eq (str .Version) ""}}selected{{end}}></option>
+        <option value=""{{if eq (str .Version) ""}} selected{{end}}>All</option>
         {{range .Versions}}<option value="{{esc .}}" {{if eq (str .) (str $.Version)}}selected{{end}}>{{esc .}}</option>{{end}}
       </select>
     </div>

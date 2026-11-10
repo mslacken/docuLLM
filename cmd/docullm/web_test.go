@@ -72,8 +72,9 @@ func TestWebPagesRender(t *testing.T) {
 		want []string
 	}{
 		{"index", mcpserver.BuildIndexPageData(c), []string{"/documents", "/search", "/command", "/term"}},
-		{"documents", mcpserver.BuildListDocumentsPageData(c, "", ""), []string{"Guide", "Sample Product", "Read &rarr;"}},
-		{"documents-filter", mcpserver.BuildListDocumentsPageData(c, "Nope", ""), []string{"No documents match"}},
+		{"documents", mcpserver.BuildListDocumentsPageData(c, "", ""), []string{"Guide", "Sample Product", "Read &rarr;", `<option value="" selected>All</option>`}},
+		{"documents-filter", mcpserver.BuildListDocumentsPageData(c, "Nope", ""), []string{"No documents match", `<option value="">All</option>`}},
+		{"documents-version", mcpserver.BuildListDocumentsPageData(c, "", "1.0"), []string{`<option value="">All</option>`}},
 		{"read-toc", mcpserver.BuildReadDocumentPageData(c, "guide", ""), []string{"Guide", "Table of contents", "Setup", "Quorum"}},
 		{"read-chapter", mcpserver.BuildReadDocumentPageData(c, "guide", "setup"), []string{"crm configure show", "CIB", "Commands in this chapter"}},
 		{"read-unknown", mcpserver.BuildReadDocumentPageData(c, "nope", ""), []string{"Unknown document"}},

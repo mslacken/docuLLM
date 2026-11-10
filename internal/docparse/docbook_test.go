@@ -275,7 +275,7 @@ func TestDocBookCorpus(t *testing.T) {
 	if sles.Summary != "Lead of the demo." {
 		t.Errorf("summary = %q", sles.Summary)
 	}
-	if want := (Distro{Product: "SUSE Linux Enterprise Server", Versions: []string{"16.1", "16.0"}}); !reflect.DeepEqual(sles.Distro, want) {
+	if want := (Distro{Name: "SUSE Linux Enterprise Server", Versions: []string{"16.1", "16.0"}}); !reflect.DeepEqual(sles.Distro, want) {
 		t.Errorf("distro = %+v", sles.Distro)
 	}
 	if sles.License != "GFDL-1.2-invariants-only OR GFDL-1.3-invariants-only" {

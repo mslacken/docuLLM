@@ -238,16 +238,16 @@ func (l *xmlLoader) buildDocBook(name string) (Document, []GlossaryEntry, []stri
 	}
 	merge := st.child("merge")
 	addAssemblyMeta(&doc, merge)
-	if doc.Distro.Product == "" {
-		doc.Distro.Product = entityText(f.ents, "productname", prof)
+	if doc.Distro.Name == "" {
+		doc.Distro.Name = entityText(f.ents, "productname", prof)
 	}
 	if len(doc.Distro.Versions) == 0 {
 		if v := entityText(f.ents, "productnumber", prof); v != "" {
 			doc.Distro.Versions = []string{v}
 		}
 	}
-	if doc.Distro.Product == "" && doc.Bugtracker != nil {
-		doc.Distro.Product = reTrailingVersion.ReplaceAllString(doc.Bugtracker.Product, "")
+	if doc.Distro.Name == "" && doc.Bugtracker != nil {
+		doc.Distro.Name = reTrailingVersion.ReplaceAllString(doc.Bugtracker.Product, "")
 	}
 	addProfileVersions(&doc.Distro, prof)
 	modules := l.modules(st, resources, prof)
@@ -349,8 +349,8 @@ func addAssemblyMeta(doc *Document, merge *xnode) {
 			doc.Meta.SocialDescription = text
 		case "productname":
 			for _, p := range m.find("productname") {
-				if doc.Distro.Product == "" {
-					doc.Distro.Product = p.flatText()
+				if doc.Distro.Name == "" {
+					doc.Distro.Name = p.flatText()
 				}
 				if v := p.attr["version"]; v != "" && !contains(doc.Distro.Versions, v) {
 					doc.Distro.Versions = append(doc.Distro.Versions, v)

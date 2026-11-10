@@ -15,6 +15,7 @@ type Document struct {
 	Title    string    `json:"title" yaml:"title"`
 	Summary  string    `json:"summary" yaml:"summary"`
 	Distro   Distro    `json:"distro" yaml:"distro"`
+	Product  Product   `json:"product" yaml:"product"`
 	Chapters []Chapter `json:"chapters" yaml:"chapters"`
 	License  string    `json:"license,omitempty" yaml:"license,omitempty"`
 
@@ -28,9 +29,17 @@ type Document struct {
 	Translation string      `json:"translation,omitempty" yaml:"translation,omitempty"` // "yes" or "no"
 }
 
-// Distro is the product and versions a document applies to.
+// Distro is the distribution a document applies to, e.g. "SUSE Linux
+// Enterprise Server" and its versions (16.0, 16.1, ...).
 type Distro struct {
-	Product  string   `json:"product,omitempty" yaml:"product,omitempty"`
+	Name     string   `json:"name,omitempty" yaml:"name,omitempty"`
+	Versions []string `json:"versions,omitempty" yaml:"versions,omitempty"`
+}
+
+// Product is a specific product (e.g. "SLES for SAP Applications") a document
+// applies to. It is distinct from the Distro: both can carry a version.
+type Product struct {
+	Name     string   `json:"name,omitempty" yaml:"name,omitempty"`
 	Versions []string `json:"versions,omitempty" yaml:"versions,omitempty"`
 }
 
@@ -267,8 +276,8 @@ func addDistro(d *Distro, s segment) {
 			}
 		}
 	}
-	if d.Product == "" {
-		d.Product = product
+	if d.Name == "" {
+		d.Name = product
 	}
 	if version == "" {
 		return
