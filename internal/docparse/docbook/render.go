@@ -1,10 +1,14 @@
-package docparse
+package docbook
 
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"docullm/internal/docparse"
+	"docullm/internal/docparse/markdown"
 )
 
 // renderer turns profiled DocBook topics into markdown and records the
@@ -13,7 +17,7 @@ import (
 type renderer struct {
 	imgDir string            // IMG_SRC_DIR, images are referenced relative to it
 	ids    map[string]string // xml:id -> title of every element of the document, for xrefs
-	ch     *Chapter          // chapter being rendered, nil while rendering other text
+	ch     *docparse.Chapter // chapter being rendered, nil while rendering other text
 	alt    string            // fallback alt text for images in a figure
 }
 
@@ -66,13 +70,13 @@ func idTitle(n *xnode) string {
 }
 
 // glossary returns the glossary entries of all modules.
-func (r *renderer) glossary(modules []*dbModule) []GlossaryEntry {
-	var out []GlossaryEntry
+func (r *renderer) glossary(modules []*dbModule) []docparse.GlossaryEntry {
+	var out []docparse.GlossaryEntry
 	for _, m := range modules {
 		for _, e := range m.topic.find("glossentry") {
 			term, def := e.child("glossterm").flatText(), r.text(e.child("glossdef"))
 			if term != "" && def != "" {
-				out = append(out, GlossaryEntry{Term: term, WhatIs: def})
+				out = append(out, docparse.GlossaryEntry{Term: term, WhatIs: def})
 			}
 		}
 		out = append(out, r.glossary(m.kids)...)
@@ -82,8 +86,8 @@ func (r *renderer) glossary(modules []*dbModule) []GlossaryEntry {
 
 // chapter renders the top level module m. offset is the number of lines of
 // the document before the chapter, for Start and End.
-func (r *renderer) chapter(m *dbModule, offset int) (Chapter, []string) {
-	ch := Chapter{Title: m.title, FilePath: m.file, RenderAs: m.renderAs, TopicType: "container", LegacySources: m.legacy}
+func (r *renderer) chapter(m *dbModule, offset int) (docparse.Chapter, []string) {
+	ch := docparse.Chapter{Title: m.title, FilePath: m.file, RenderAs: m.renderAs, TopicType: "container", LegacySources: m.legacy}
 	if m.topic != nil {
 		ch.TopicType = m.topic.attr["role"]
 		ch.Maintainer = maintainer(m.topic)
@@ -92,13 +96,9 @@ func (r *renderer) chapter(m *dbModule, offset int) (Chapter, []string) {
 	lines := r.module(m, 2, 0)
 	r.ch = nil
 	ch.Start, ch.End = uint(offset+1), uint(offset+len(lines))
-	children := parseNodes(lines)
-	ch.Commands = commandsIn(children)
-	ch.prose = proseOf(children)
-	ch.Summary = r.text(m.abstract)
-	if ch.Summary == "" {
-		ch.Summary = leadText(children)
-	}
+	a := markdown.Analyze(lines)
+	ch.Commands, ch.Prose = a.Commands, a.Prose
+	ch.Summary = firstNonEmpty(r.text(m.abstract), a.Lead)
 	return ch, lines
 }
 
@@ -116,9 +116,9 @@ func maintainer(topic *xnode) string {
 func (r *renderer) module(m *dbModule, level, depth int) []string {
 	bs := [][]string{{mdHeading(level, m.title, m.id)}}
 	if depth > 0 {
-		r.ch.Sections = append(r.ch.Sections, Section{ID: m.id, Title: m.title, Level: depth, File: m.file})
+		r.ch.Sections = append(r.ch.Sections, docparse.Section{ID: m.id, Title: m.title, Level: depth, File: m.file})
 		for _, u := range m.legacy {
-			if !contains(r.ch.LegacySources, u) {
+			if !slices.Contains(r.ch.LegacySources, u) {
 				r.ch.LegacySources = append(r.ch.LegacySources, u)
 			}
 		}
@@ -148,7 +148,7 @@ func mdHeading(level int, title, id string) string {
 func (r *renderer) without(kids []*xnode, names ...string) []*xnode {
 	var out []*xnode
 	for _, k := range r.flat(kids) {
-		if k.name == "" || !contains(names, k.name) {
+		if k.name == "" || !slices.Contains(names, k.name) {
 			out = append(out, k)
 		}
 	}
@@ -164,7 +164,7 @@ func (r *renderer) flat(kids []*xnode) []*xnode {
 			out = append(out, k)
 			continue
 		}
-		if r.ch != nil && k.attr["href"] != "" && !contains(r.ch.Includes, k.attr["href"]) {
+		if r.ch != nil && k.attr["href"] != "" && !slices.Contains(r.ch.Includes, k.attr["href"]) {
 			r.ch.Includes = append(r.ch.Includes, k.attr["href"])
 		}
 		out = append(out, r.flat(k.kids)...)
@@ -265,14 +265,14 @@ func (r *renderer) block(n *xnode, level, depth int) [][]string {
 		return prefixFirst(bs, "**"+r.title(n)+".**")
 	case "section", "sect1", "sect2", "sect3", "sect4", "sect5", "simplesect", "topic":
 		title := r.title(n)
-		r.ch.Sections = append(r.ch.Sections, Section{ID: n.attr["id"], Title: title, Level: depth})
+		r.ch.Sections = append(r.ch.Sections, docparse.Section{ID: n.attr["id"], Title: title, Level: depth})
 		bs := [][]string{{mdHeading(level, title, n.attr["id"])}}
 		return append(bs, r.blocks(r.without(n.kids, "info", "title", "subtitle", "titleabbrev", "abstract"), level+1, depth+1)...)
 	case "bridgehead":
 		return [][]string{{"**" + n.flatText() + "**"}}
 	case "procedure":
 		steps := r.elems(n.kids, "step")
-		r.ch.Procedures = append(r.ch.Procedures, Procedure{ID: n.attr["id"], Title: r.title(n), Steps: len(steps)})
+		r.ch.Procedures = append(r.ch.Procedures, docparse.Procedure{ID: n.attr["id"], Title: r.title(n), Steps: len(steps)})
 		bs := r.titled(n, "")
 		bs = append(bs, r.blocks(r.without(n.kids, "title", "info", "step"), level, depth)...)
 		return append(bs, r.list(steps, true, level, depth))
@@ -296,7 +296,7 @@ func (r *renderer) block(n *xnode, level, depth int) [][]string {
 		return [][]string{codeBlock(n)}
 	case "note", "tip", "important", "warning", "caution":
 		title := r.title(n)
-		r.ch.Admonitions = append(r.ch.Admonitions, Admonition{Type: n.name, Title: title})
+		r.ch.Admonitions = append(r.ch.Admonitions, docparse.Admonition{Type: n.name, Title: title})
 		head := "**" + admonitions[n.name] + ":**"
 		if title != "" {
 			head += " " + title
@@ -446,7 +446,10 @@ func listItem(marker string, bs [][]string) []string {
 	return out
 }
 
-var reOrderedItem = regexp.MustCompile(`^\d+[.)](?:\s|$)`)
+var (
+	reOrderedItem = regexp.MustCompile(`^\d+[.)](?:\s|$)`)
+	reFence       = regexp.MustCompile("^\\s*(```|~~~)")
+)
 
 // isMarkdownBlockStart reports whether ln starts something other than a
 // paragraph, which must not follow a list marker on the same line.
@@ -600,7 +603,7 @@ func (r *renderer) image(n *xnode) string {
 	}
 	alt := firstNonEmpty(n.child("textobject").flatText(), n.child("alt").flatText(), r.alt)
 	if r.ch != nil {
-		r.ch.Images = append(r.ch.Images, Image{File: file, Alt: alt})
+		r.ch.Images = append(r.ch.Images, docparse.Image{File: file, Alt: alt})
 	}
 	return "![" + strings.ReplaceAll(alt, "]", `\]`) + "](" + file + ")"
 }
@@ -697,13 +700,13 @@ func (r *renderer) inline(n *xnode) string {
 func (r *renderer) xref(linkend, text string) string {
 	title, ok := r.ids[linkend]
 	if r.ch != nil && !containsXref(r.ch.Xrefs, linkend) {
-		r.ch.Xrefs = append(r.ch.Xrefs, Xref{Linkend: linkend, Resolved: ok})
+		r.ch.Xrefs = append(r.ch.Xrefs, docparse.Xref{Linkend: linkend, Resolved: ok})
 	}
 	text = firstNonEmpty(text, title, linkend)
 	return "[" + text + "](#" + linkend + ")"
 }
 
-func containsXref(xs []Xref, linkend string) bool {
+func containsXref(xs []docparse.Xref, linkend string) bool {
 	for _, x := range xs {
 		if x.Linkend == linkend {
 			return true
@@ -727,7 +730,7 @@ func (r *renderer) link(n *xnode) string {
 			found = found || l.URL == url
 		}
 		if !found {
-			r.ch.Links = append(r.ch.Links, Link{URL: url, Text: text})
+			r.ch.Links = append(r.ch.Links, docparse.Link{URL: url, Text: text})
 		}
 	}
 	if text == "" {

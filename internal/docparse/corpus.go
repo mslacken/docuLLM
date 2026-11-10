@@ -1,13 +1,9 @@
 package docparse
 
 import (
-	"fmt"
-	"io/fs"
 	"math"
-	"os"
-	"path"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -20,105 +16,34 @@ type Corpus struct {
 	Documents []Document      `json:"documents" yaml:"documents"`
 	Glossary  []GlossaryEntry `json:"glossary" yaml:"glossary"`
 
-	lines map[string][]string // source file -> lines, see Chapter.source
+	lines map[string][]string // source -> lines, see Chapter.LinesKey
+	ids   map[string]int      // document ids handed out, see AddDocument
 	df    map[string]int      // number of chapters containing a word, for search
 	total int                 // number of chapters
 }
 
-// LoadCorpus reads either a single (possibly combined) markdown file or a
-// directory tree of markdown files. In a directory, files that were produced
-// by combine.sh are skipped, as their content is already in the tree.
-// A directory with DC files at its top level is read as DocBook assemblies
-// instead (see docbook.go), as is a single DC file.
-func LoadCorpus(root string) (*Corpus, error) {
-	st, err := os.Stat(root)
-	if err != nil {
-		return nil, err
-	}
-	if !st.IsDir() && strings.HasPrefix(filepath.Base(root), "DC-") {
-		return loadDocBook(filepath.Dir(root), []string{filepath.Base(root)})
-	}
-	if st.IsDir() {
-		if dcs := dcFiles(root); len(dcs) > 0 {
-			return loadDocBook(root, dcs)
-		}
-	}
-	if !st.IsDir() {
-		data, err := os.ReadFile(root)
-		if err != nil {
-			return nil, err
-		}
-		return BuildDocuments(SplitSources(data, root)), nil
-	}
-	var segs []segment
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
-			return err
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if isCombined(data) {
-			fmt.Fprintln(os.Stderr, "skipping combined file", p)
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		segs = append(segs, newSegment(filepath.ToSlash(rel), p, strings.Split(string(data), "\n")))
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(segs) == 0 {
-		return nil, fmt.Errorf("no markdown files found in %s", root)
-	}
-	return BuildDocuments(segs), nil
+// NewCorpus returns an empty corpus for a parser to fill with AddLines,
+// AddDocument and AddGlossary. Finish must be called once it is complete.
+func NewCorpus() *Corpus {
+	return &Corpus{Documents: []Document{}, lines: map[string][]string{}, ids: map[string]int{}}
 }
 
-func isCombined(data []byte) bool {
-	for _, ln := range strings.Split(string(data), "\n") {
-		if sourceMarker.MatchString(ln) {
-			return true
-		}
-	}
-	return false
+// AddLines stores the lines of a source; chapters refer to them by their
+// LinesKey and their Start and End line.
+func (c *Corpus) AddLines(key string, lines []string) {
+	c.lines[key] = lines
 }
 
-// documentID is the name of the directory holding the guide, e.g.
-// "HA-crmsh-introduction", or the file name for a lone file.
-func documentID(file string) string {
-	if dir := path.Base(path.Dir(file)); dir != "." && dir != "/" {
-		return dir
-	}
-	return strings.TrimSuffix(path.Base(file), path.Ext(file))
+// AddDocument appends doc, with a numeric suffix added to its id if the id is
+// already taken.
+func (c *Corpus) AddDocument(doc Document) {
+	doc.ID = UniqueID(c.ids, doc.ID)
+	c.Documents = append(c.Documents, doc)
 }
 
-var reNonSlug = regexp.MustCompile(`[^a-z0-9]+`)
-
-func slug(s string) string {
-	s = strings.Trim(reNonSlug.ReplaceAllString(strings.ToLower(s), "-"), "-")
-	if s == "" {
-		return "chapter"
-	}
-	return s
-}
-
-// uniqueID returns id, or id with a numeric suffix if it was handed out before.
-func uniqueID(seen map[string]int, id string) string {
-	seen[id]++
-	if n := seen[id]; n > 1 {
-		return fmt.Sprintf("%s-%d", id, n)
-	}
-	return id
-}
-
-// addGlossary merges entries into the corpus glossary. The guides share their
+// AddGlossary merges entries into the corpus glossary. The guides share their
 // glossary, so the first definition of a term wins.
-func (c *Corpus) addGlossary(entries []GlossaryEntry) {
+func (c *Corpus) AddGlossary(entries []GlossaryEntry) {
 	for _, e := range entries {
 		if c.term(e.Term) == nil {
 			c.Glossary = append(c.Glossary, e)
@@ -135,9 +60,9 @@ func (c *Corpus) term(term string) *GlossaryEntry {
 	return nil
 }
 
-// finish sorts the glossary, records which glossary terms every chapter
+// Finish sorts the glossary, records which glossary terms every chapter
 // mentions and builds the document frequencies used by search.
-func (c *Corpus) finish() {
+func (c *Corpus) Finish() {
 	sort.Slice(c.Glossary, func(i, j int) bool {
 		return strings.ToLower(c.Glossary[i].Term) < strings.ToLower(c.Glossary[j].Term)
 	})
@@ -151,10 +76,10 @@ func (c *Corpus) finish() {
 	for d := range c.Documents {
 		for i := range c.Documents[d].Chapters {
 			ch := &c.Documents[d].Chapters[i]
-			t, ok := terms[ch.prose]
+			t, ok := terms[ch.Prose]
 			if !ok {
-				t = c.termsIn(ch.prose)
-				terms[ch.prose] = t
+				t = c.termsIn(ch.Prose)
+				terms[ch.Prose] = t
 			}
 			ch.Terms = t
 			c.total++
@@ -256,7 +181,7 @@ func (d *Document) Chapter(id string) *Chapter {
 
 // Text returns the markdown of the chapter.
 func (c *Corpus) Text(ch *Chapter) string {
-	lines := c.lines[ch.source]
+	lines := c.lines[ch.LinesKey]
 	start, end := int(ch.Start)-1, min(int(ch.End), len(lines))
 	if start < 0 || start >= end {
 		return ""
@@ -270,7 +195,7 @@ func (d *Document) Matches(product, version string) bool {
 	if product != "" && !strings.Contains(strings.ToLower(d.Distro.Name), strings.ToLower(product)) {
 		return false
 	}
-	return version == "" || contains(d.Distro.Versions, version)
+	return version == "" || slices.Contains(d.Distro.Versions, version)
 }
 
 func words(s string) []string {

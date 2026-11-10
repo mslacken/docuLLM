@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"docullm/internal/docparse"
+	"docullm/internal/docparse/markdown"
 )
 
 // sampleCorpus is a small corpus with one document (two chapters, a command)
@@ -54,7 +55,7 @@ The coordinator.
 `
 
 func buildCorpus() *docparse.Corpus {
-	return docparse.BuildDocuments(docparse.SplitSources([]byte(sampleCorpus), "combined.md"))
+	return markdown.BuildDocuments(markdown.SplitSources([]byte(sampleCorpus), "combined.md"))
 }
 
 // TestWebPagesRender requests every page through the web handler, so the

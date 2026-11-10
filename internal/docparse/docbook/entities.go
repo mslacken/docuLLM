@@ -1,4 +1,4 @@
-package docparse
+package docbook
 
 import (
 	"os"

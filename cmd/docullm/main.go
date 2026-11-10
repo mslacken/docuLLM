@@ -10,6 +10,9 @@ import (
 	"os"
 
 	"docullm/internal/docparse"
+	"docullm/internal/docparse/docbook"
+	"docullm/internal/docparse/loader"
+	"docullm/internal/docparse/markdown"
 	"docullm/internal/mcpserver"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,7 +48,7 @@ func main() {
 	flag.Parse()
 	debug = *debugFlag
 	mcpserver.Debug = debug
-	docparse.Debug = debug
+	docbook.Debug = debug
 	if *file == "" && flag.NArg() > 0 {
 		*file = flag.Arg(0)
 	}
@@ -59,7 +62,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "-mcp and -web need a file or a directory (-d)")
 			os.Exit(1)
 		}
-		corpus, err := docparse.LoadCorpus(root)
+		corpus, err := loader.Load(root)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error reading input:", err)
 			os.Exit(1)
@@ -101,11 +104,11 @@ func main() {
 		if name == "" {
 			name = "stdin"
 		}
-		printCorpus(docparse.BuildDocuments(docparse.SplitSources(data, name)), *asJSON)
+		printCorpus(markdown.BuildDocuments(markdown.SplitSources(data, name)), *asJSON)
 		return
 	}
 
-	out := docparse.BuildTree(data)
+	out := markdown.BuildTree(data)
 
 	enc, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

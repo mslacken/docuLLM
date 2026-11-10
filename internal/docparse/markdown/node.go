@@ -1,4 +1,4 @@
-package docparse
+package markdown
 
 import (
 	"fmt"

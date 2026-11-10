@@ -10,7 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"docullm/internal/docparse"
+	"docullm/internal/docparse/loader"
+	"docullm/internal/docparse/markdown"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -62,7 +63,7 @@ The coordinator.
 `
 
 func TestReadDocument(t *testing.T) {
-	c := docparse.BuildDocuments(docparse.SplitSources([]byte(sample), "combined.md"))
+	c := markdown.BuildDocuments(markdown.SplitSources([]byte(sample), "combined.md"))
 	if len(c.Documents) != 1 || len(c.Glossary) != 3 {
 		t.Fatalf("got %d documents and %d glossary entries", len(c.Documents), len(c.Glossary))
 	}
@@ -150,7 +151,7 @@ func TestDocBookFieldsNotExposed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c, err := docparse.LoadCorpus(root)
+	c, err := loader.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}

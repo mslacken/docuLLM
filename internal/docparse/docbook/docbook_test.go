@@ -1,4 +1,4 @@
-package docparse
+package docbook
 
 import (
 	"os"
@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"docullm/internal/docparse"
 )
 
 // writeFiles creates the files (name -> content) below a new temp dir.
@@ -256,7 +258,7 @@ func docbookFixture(t *testing.T) string {
 }
 
 func TestDocBookCorpus(t *testing.T) {
-	c, err := LoadCorpus(docbookFixture(t))
+	c, err := Load(docbookFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,16 +277,16 @@ func TestDocBookCorpus(t *testing.T) {
 	if sles.Summary != "Lead of the demo." {
 		t.Errorf("summary = %q", sles.Summary)
 	}
-	if want := (Distro{Name: "SUSE Linux Enterprise Server", Versions: []string{"16.1", "16.0"}}); !reflect.DeepEqual(sles.Distro, want) {
+	if want := (docparse.Distro{Name: "SUSE Linux Enterprise Server", Versions: []string{"16.1", "16.0"}}); !reflect.DeepEqual(sles.Distro, want) {
 		t.Errorf("distro = %+v", sles.Distro)
 	}
 	if sles.License != "GFDL-1.2-invariants-only OR GFDL-1.3-invariants-only" {
 		t.Errorf("license = %q", sles.License)
 	}
-	if want := (DocSource{DC: "DC-SLES-demo", Assembly: "articles/demo.asm.xml", Structure: "demo-b"}); *sles.Source != want {
+	if want := (docparse.DocSource{DC: "DC-SLES-demo", Assembly: "articles/demo.asm.xml", Structure: "demo-b"}); *sles.Source != want {
 		t.Errorf("source = %+v", *sles.Source)
 	}
-	wantMeta := DocMeta{
+	wantMeta := docparse.DocMeta{
 		Maintainer: "tux@example.com", Series: "Products & Solutions", Tasks: []string{"Installation", "Administration"},
 		Architectures: []string{"x86"}, Updated: "2026-02-03", Description: "Meta description",
 	}
@@ -292,7 +294,7 @@ func TestDocBookCorpus(t *testing.T) {
 		t.Errorf("meta = %+v", *sles.Meta)
 	}
 	if sles.Subtitle != "A subtitle" || sles.Translation != "yes" || sles.Bugtracker.Component != "Docs" ||
-		!reflect.DeepEqual(sles.Revisions, []Revision{{Date: "2026-01-02", Description: "Initial version"}}) {
+		!reflect.DeepEqual(sles.Revisions, []docparse.Revision{{Date: "2026-01-02", Description: "Initial version"}}) {
 		t.Errorf("subtitle %q, translation %q, bugtracker %+v, revisions %+v", sles.Subtitle, sles.Translation, sles.Bugtracker, sles.Revisions)
 	}
 
@@ -312,14 +314,14 @@ func TestDocBookCorpus(t *testing.T) {
 		!reflect.DeepEqual(ch.LegacySources, []string{"https://github.com/SUSE/doc-sle/blob/main/xml/install.xml"}) {
 		t.Errorf("includes %q, legacy %q", ch.Includes, ch.LegacySources)
 	}
-	if want := []Xref{{"about-sec", true}, {"dangling", false}}; !reflect.DeepEqual(ch.Xrefs, want) {
+	if want := []docparse.Xref{{Linkend: "about-sec", Resolved: true}, {Linkend: "dangling", Resolved: false}}; !reflect.DeepEqual(ch.Xrefs, want) {
 		t.Errorf("xrefs = %+v", ch.Xrefs)
 	}
-	if !reflect.DeepEqual(ch.Links, []Link{{URL: "https://example.com/docs", Text: "the docs"}}) ||
-		!reflect.DeepEqual(ch.Images, []Image{{File: "images/overview.png", Alt: "Overview"}}) ||
-		!reflect.DeepEqual(ch.Procedures, []Procedure{{ID: "proc-install", Title: "Installing the package", Steps: 2}}) ||
-		!reflect.DeepEqual(ch.Admonitions, []Admonition{{Type: "note", Title: "Be careful"}}) ||
-		!reflect.DeepEqual(ch.Sections, []Section{{ID: "install-verify", Title: "Verifying", Level: 1}}) {
+	if !reflect.DeepEqual(ch.Links, []docparse.Link{{URL: "https://example.com/docs", Text: "the docs"}}) ||
+		!reflect.DeepEqual(ch.Images, []docparse.Image{{File: "images/overview.png", Alt: "Overview"}}) ||
+		!reflect.DeepEqual(ch.Procedures, []docparse.Procedure{{ID: "proc-install", Title: "Installing the package", Steps: 2}}) ||
+		!reflect.DeepEqual(ch.Admonitions, []docparse.Admonition{{Type: "note", Title: "Be careful"}}) ||
+		!reflect.DeepEqual(ch.Sections, []docparse.Section{{ID: "install-verify", Title: "Verifying", Level: 1}}) {
 		t.Errorf("structure = %+v %+v %+v %+v %+v", ch.Links, ch.Images, ch.Procedures, ch.Admonitions, ch.Sections)
 	}
 
@@ -346,7 +348,7 @@ func TestDocBookCorpus(t *testing.T) {
 
 	more := sles.Chapters[1]
 	if more.ID != "more" || more.TopicType != "container" || more.Summary != "Container abstract." ||
-		!reflect.DeepEqual(more.Sections, []Section{{ID: "about", Title: "About the demo", Level: 1, File: "concepts/about.xml"}, {ID: "about-sec", Title: "Details", Level: 2}}) {
+		!reflect.DeepEqual(more.Sections, []docparse.Section{{ID: "about", Title: "About the demo", Level: 1, File: "concepts/about.xml"}, {ID: "about-sec", Title: "Details", Level: 2}}) {
 		t.Errorf("container chapter = %+v", more)
 	}
 	if want := "## More {#more}\n\nContainer abstract.\n\n### About the demo {#about}\n\nThe CIB of SUSE Linux Enterprise Server.\n\n#### Details {#about-sec}"; !strings.HasPrefix(c.Text(&more), want) {
@@ -357,7 +359,7 @@ func TestDocBookCorpus(t *testing.T) {
 	}
 
 	// shared glossary, deduplicated across the two documents
-	want := []GlossaryEntry{
+	want := []docparse.GlossaryEntry{
 		{Term: "CIB (cluster information base)", WhatIs: "The cluster configuration, see node."},
 		{Term: "node", WhatIs: "A member."},
 	}
@@ -374,14 +376,14 @@ func TestDocBookCorpus(t *testing.T) {
 
 func TestSingleDCFile(t *testing.T) {
 	root := docbookFixture(t)
-	c, err := LoadCorpus(filepath.Join(root, "DC-SLES-demo"))
+	c, err := Load(filepath.Join(root, "DC-SLES-demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(c.Documents) != 1 || c.Documents[0].ID != "sles-demo" {
 		t.Errorf("documents = %+v", c.Documents)
 	}
-	if _, err := LoadCorpus(filepath.Join(root, "DC-SLES-gone")); err == nil {
+	if _, err := Load(filepath.Join(root, "DC-SLES-gone")); err == nil {
 		t.Error("expected error for a DC file without assembly")
 	}
 }

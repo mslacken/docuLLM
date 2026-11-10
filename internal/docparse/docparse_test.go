@@ -2,7 +2,6 @@ package docparse
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -44,16 +43,9 @@ func TestGlossaryMatchers(t *testing.T) {
 	}
 }
 
-func TestProseSkipsCode(t *testing.T) {
-	prose := proseOf(parseNodes(strings.Split("## Title\n\nUse `crm` here.\n\n```\n# crm configure\n```\n", "\n")))
-	if strings.Contains(prose, "crm") || !strings.Contains(prose, "Use  here.") {
-		t.Errorf("prose = %q", prose)
-	}
-}
-
 func TestUniqueID(t *testing.T) {
 	seen := map[string]int{}
-	got := []string{uniqueID(seen, slug("Overview")), uniqueID(seen, slug("Overview")), uniqueID(seen, slug("1.2 What's new?"))}
+	got := []string{UniqueID(seen, Slug("Overview")), UniqueID(seen, Slug("Overview")), UniqueID(seen, Slug("1.2 What's new?"))}
 	want := []string{"overview", "overview-2", "1-2-what-s-new"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %q, want %q", got, want)

@@ -1,4 +1,4 @@
-package docparse
+package docbook
 
 import (
 	"encoding/xml"
@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -184,7 +185,7 @@ func legacySources(raw string) []string {
 			continue
 		}
 		for _, u := range reURL.FindAllString(m[1], -1) {
-			if !contains(out, u) {
+			if !slices.Contains(out, u) {
 				out = append(out, u)
 			}
 		}
@@ -231,7 +232,7 @@ func (p profile) keep(n *xnode) bool {
 		}
 		match := false
 		for _, have := range profileValues(v) {
-			match = match || contains(d.want, have)
+			match = match || slices.Contains(d.want, have)
 		}
 		if !match {
 			return false

@@ -1,4 +1,10 @@
-package docparse
+// DocBook assemblies (SUSE "Smart Docs", see github.com/SUSE/doc-modular) are
+// published through DC files: shell style KEY="value" files naming the
+// assembly (MAIN, SRC_DIR) and the profile (PROFOS, PROFARCH, PROFCONDITION).
+// Every DC file becomes one Document; its chapters are the top level modules
+// of the selected <structure>, rendered to markdown so that the markdown
+// based search, command and glossary extraction work unchanged.
+package docbook
 
 import (
 	"bufio"
@@ -7,16 +13,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
-)
+	"sync"
 
-// DocBook assemblies (SUSE "Smart Docs", see github.com/SUSE/doc-modular) are
-// published through DC files: shell style KEY="value" files naming the
-// assembly (MAIN, SRC_DIR) and the profile (PROFOS, PROFARCH, PROFCONDITION).
-// Every DC file becomes one Document; its chapters are the top level modules
-// of the selected <structure>, rendered to markdown so that the markdown
-// based search, command and glossary extraction work unchanged.
+	"docullm/internal/docparse"
+)
 
 // Debug enables diagnostic output on stderr while loading documents.
 var Debug bool
@@ -33,89 +36,6 @@ func warnf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "docbook: "+format+"\n", args...)
 }
 
-// DocSource records where a DocBook document came from.
-type DocSource struct {
-	DC        string `json:"dc" yaml:"dc"`                                   // DC file, relative to the corpus root
-	Assembly  string `json:"assembly" yaml:"assembly"`                       // assembly file, relative to the corpus root
-	Structure string `json:"structure,omitempty" yaml:"structure,omitempty"` // xml:id of the selected <structure>
-}
-
-// Profile is the profiling a DC file applies (PROFOS, PROFARCH, PROFCONDITION).
-type Profile struct {
-	OS        []string `json:"os,omitempty" yaml:"os,omitempty"`
-	Arch      []string `json:"arch,omitempty" yaml:"arch,omitempty"`
-	Condition []string `json:"condition,omitempty" yaml:"condition,omitempty"`
-}
-
-// DocMeta is the <meta> information of an assembly.
-type DocMeta struct {
-	Maintainer        string   `json:"maintainer,omitempty" yaml:"maintainer,omitempty"`
-	Series            string   `json:"series,omitempty" yaml:"series,omitempty"`
-	Tasks             []string `json:"tasks,omitempty" yaml:"tasks,omitempty"`
-	Categories        []string `json:"categories,omitempty" yaml:"categories,omitempty"`
-	Architectures     []string `json:"architectures,omitempty" yaml:"architectures,omitempty"`
-	Updated           string   `json:"updated,omitempty" yaml:"updated,omitempty"`
-	Title             string   `json:"title,omitempty" yaml:"title,omitempty"` // title for search engines
-	Description       string   `json:"description,omitempty" yaml:"description,omitempty"`
-	SocialDescription string   `json:"social_description,omitempty" yaml:"social_description,omitempty"`
-}
-
-// Revision is an entry of the revision history.
-type Revision struct {
-	Date        string `json:"date,omitempty" yaml:"date,omitempty"`
-	Description string `json:"description,omitempty" yaml:"description,omitempty"`
-}
-
-// Bugtracker is where documentation bugs are reported (docmanager metadata).
-type Bugtracker struct {
-	URL       string `json:"url,omitempty" yaml:"url,omitempty"`
-	Component string `json:"component,omitempty" yaml:"component,omitempty"`
-	Product   string `json:"product,omitempty" yaml:"product,omitempty"`
-	Assignee  string `json:"assignee,omitempty" yaml:"assignee,omitempty"`
-}
-
-// Section is a heading below the chapter heading. Level 1 is a direct
-// subsection of the chapter. File is set for sections taken from another
-// topic file (nested modules).
-type Section struct {
-	ID    string `json:"id,omitempty" yaml:"id,omitempty"`
-	Title string `json:"title" yaml:"title"`
-	Level int    `json:"level" yaml:"level"`
-	File  string `json:"file,omitempty" yaml:"file,omitempty"`
-}
-
-// Procedure is a numbered list of steps.
-type Procedure struct {
-	ID    string `json:"id,omitempty" yaml:"id,omitempty"`
-	Title string `json:"title,omitempty" yaml:"title,omitempty"`
-	Steps int    `json:"steps" yaml:"steps"`
-}
-
-// Admonition is a note, tip, important, warning or caution box.
-type Admonition struct {
-	Type  string `json:"type" yaml:"type"`
-	Title string `json:"title,omitempty" yaml:"title,omitempty"`
-}
-
-// Xref is a cross reference; Resolved is false if the target is not part of
-// the document.
-type Xref struct {
-	Linkend  string `json:"linkend" yaml:"linkend"`
-	Resolved bool   `json:"resolved" yaml:"resolved"`
-}
-
-// Link is an external link.
-type Link struct {
-	URL  string `json:"url" yaml:"url"`
-	Text string `json:"text,omitempty" yaml:"text,omitempty"`
-}
-
-// Image is an image shown in the chapter; File is relative to the corpus root.
-type Image struct {
-	File string `json:"file" yaml:"file"`
-	Alt  string `json:"alt,omitempty" yaml:"alt,omitempty"`
-}
-
 // dcFiles returns the names of the DC files at the top level of dir, sorted.
 // Disabled ones (_DC-*) do not match.
 func dcFiles(dir string) []string {
@@ -125,7 +45,7 @@ func dcFiles(dir string) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "DC-") {
+		if !e.IsDir() && isDCFile(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}
@@ -161,29 +81,75 @@ func readDC(p string) (map[string]string, error) {
 // dcDocID derives the document id from the DC file name:
 // "DC-SLES-kdump" -> "sles-kdump".
 func dcDocID(name string) string {
-	return slug(strings.TrimPrefix(name, "DC-"))
+	return docparse.Slug(strings.TrimPrefix(name, "DC-"))
 }
 
-// loadDocBook builds the corpus from the given DC files in root.
-func loadDocBook(root string, dcs []string) (*Corpus, error) {
-	l := newXMLLoader(root)
-	c := &Corpus{Documents: []Document{}, lines: map[string][]string{}}
-	ids := map[string]int{}
-	for _, name := range dcs {
-		doc, glossary, lines, err := l.buildDocBook(name)
-		if err != nil {
-			warnf("skipping %s: %v", name, err)
+// Detect reports whether root is a DC file or a directory with DC files at
+// its top level.
+func Detect(root string) bool {
+	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+		return isDCFile(root)
+	}
+	return len(dcFiles(root)) > 0
+}
+
+func isDCFile(p string) bool {
+	return strings.HasPrefix(filepath.Base(p), "DC-")
+}
+
+// Load builds the corpus from a single DC file or from all DC files at the
+// top level of the directory root.
+func Load(root string) (*docparse.Corpus, error) {
+	st, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !st.IsDir() {
+		return load(filepath.Dir(root), []string{filepath.Base(root)})
+	}
+	return load(root, dcFiles(root))
+}
+
+// load builds the corpus from the given DC files in root. Each DC file is
+// parsed by its own loader in parallel; the corpus is then filled in file
+// order, so that the document order and the first definition winning for a
+// glossary term stay deterministic.
+func load(root string, dcs []string) (*docparse.Corpus, error) {
+	type result struct {
+		doc      docparse.Document
+		glossary []docparse.GlossaryEntry
+		lines    []string
+		err      error
+	}
+	results := make([]result, len(dcs))
+	var wg sync.WaitGroup
+	for i, name := range dcs {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			debugf("Reading file: %s", name)
+			doc, glossary, lines, err := newXMLLoader(root).buildDocBook(name)
+			results[i] = result{doc: doc, glossary: glossary, lines: lines, err: err}
+		}(i, name)
+	}
+	wg.Wait()
+
+	c := docparse.NewCorpus()
+	for i, name := range dcs {
+		r := results[i]
+		if r.err != nil {
+			warnf("skipping %s: %v", name, r.err)
 			continue
 		}
-		doc.ID = uniqueID(ids, dcDocID(name))
-		c.lines[name] = lines
-		c.Documents = append(c.Documents, doc)
-		c.addGlossary(glossary)
+		r.doc.ID = dcDocID(name)
+		c.AddLines(name, r.lines)
+		c.AddDocument(r.doc)
+		c.AddGlossary(r.glossary)
 	}
 	if len(c.Documents) == 0 {
 		return nil, fmt.Errorf("no usable DC files found in %s", root)
 	}
-	c.finish()
+	c.Finish()
 	return c, nil
 }
 
@@ -201,27 +167,27 @@ type dbModule struct {
 
 // buildDocBook turns the DC file name into a Document, the glossary entries
 // it contains and the markdown lines of its chapters.
-func (l *xmlLoader) buildDocBook(name string) (Document, []GlossaryEntry, []string, error) {
+func (l *xmlLoader) buildDocBook(name string) (docparse.Document, []docparse.GlossaryEntry, []string, error) {
 	vars, err := readDC(filepath.Join(l.root, name))
 	if err != nil {
-		return Document{}, nil, nil, err
+		return docparse.Document{}, nil, nil, err
 	}
 	if vars["MAIN"] == "" {
-		return Document{}, nil, nil, fmt.Errorf("no MAIN")
+		return docparse.Document{}, nil, nil, fmt.Errorf("no MAIN")
 	}
 	asmPath := filepath.Join(l.root, vars["SRC_DIR"], vars["MAIN"])
 	f, err := l.load(asmPath)
 	if err != nil {
-		return Document{}, nil, nil, err
+		return docparse.Document{}, nil, nil, err
 	}
 	prof := profile{os: profileValues(vars["PROFOS"]), arch: profileValues(vars["PROFARCH"]), condition: profileValues(vars["PROFCONDITION"])}
 	asm := prof.apply(f.root)
 	if asm == nil || asm.name != "assembly" {
-		return Document{}, nil, nil, fmt.Errorf("%s is not an assembly", l.rel(asmPath))
+		return docparse.Document{}, nil, nil, fmt.Errorf("%s is not an assembly", l.rel(asmPath))
 	}
 	st := selectStructure(asm, firstNonEmpty(vars["STRUCTID"], vars["ROOTID"]))
 	if st == nil {
-		return Document{}, nil, nil, fmt.Errorf("%s has no structure", l.rel(asmPath))
+		return docparse.Document{}, nil, nil, fmt.Errorf("%s has no structure", l.rel(asmPath))
 	}
 	resources := map[string]string{}
 	for _, rs := range asm.children("resources") {
@@ -231,10 +197,10 @@ func (l *xmlLoader) buildDocBook(name string) (Document, []GlossaryEntry, []stri
 			}
 		}
 	}
-	doc := Document{
-		Chapters: []Chapter{},
-		Source:   &DocSource{DC: name, Assembly: l.rel(asmPath), Structure: st.attr["id"]},
-		Profile:  &Profile{OS: prof.os, Arch: prof.arch, Condition: prof.condition},
+	doc := docparse.Document{
+		Chapters: []docparse.Chapter{},
+		Source:   &docparse.DocSource{DC: name, Assembly: l.rel(asmPath), Structure: st.attr["id"]},
+		Profile:  &docparse.Profile{OS: prof.os, Arch: prof.arch, Condition: prof.condition},
 	}
 	merge := st.child("merge")
 	addAssemblyMeta(&doc, merge)
@@ -263,9 +229,9 @@ func (l *xmlLoader) buildDocBook(name string) (Document, []GlossaryEntry, []stri
 	chapterIDs := map[string]int{}
 	for _, m := range modules {
 		switch {
-		case m.topic != nil && reLegal.MatchString(m.title):
+		case m.topic != nil && docparse.IsLegalNotice(m.title):
 			legal = append(legal, m.topic.flatText())
-		case m.topic != nil && reLicenseTitle.MatchString(m.title):
+		case m.topic != nil && docparse.IsLicenseTitle(m.title):
 			license = append(license, m.topic.flatText())
 		case m.renderAs == "glossary" || isGlossaryTopic(m.topic):
 		default:
@@ -274,8 +240,8 @@ func (l *xmlLoader) buildDocBook(name string) (Document, []GlossaryEntry, []stri
 			}
 			ch, text := r.chapter(m, len(lines))
 			lines = append(lines, text...)
-			ch.ID = uniqueID(chapterIDs, firstNonEmpty(m.id, slug(m.title)))
-			ch.source = name
+			ch.ID = docparse.UniqueID(chapterIDs, firstNonEmpty(m.id, docparse.Slug(m.title)))
+			ch.LinesKey = name
 			doc.Chapters = append(doc.Chapters, ch)
 		}
 	}
@@ -285,10 +251,7 @@ func (l *xmlLoader) buildDocBook(name string) (Document, []GlossaryEntry, []stri
 	if doc.Summary == "" && len(doc.Chapters) > 0 {
 		doc.Summary = doc.Chapters[0].Summary
 	}
-	doc.License = spdx(strings.Join(legal, "\n"))
-	if doc.License == "" {
-		doc.License = spdxFromLicenseText(strings.Join(license, "\n"))
-	}
+	doc.License = docparse.License(strings.Join(legal, "\n"), strings.Join(license, "\n"))
 	return doc, glossary, lines, nil
 }
 
@@ -322,8 +285,8 @@ var reTrailingVersion = regexp.MustCompile(`\s+\d+(?:\.\d+)*(?:\s+SP\d+)?$`)
 var reVersion = regexp.MustCompile(`^\d+(?:\.\d+)+$`)
 
 // addAssemblyMeta fills the document metadata from the <merge> of the structure.
-func addAssemblyMeta(doc *Document, merge *xnode) {
-	doc.Meta = &DocMeta{}
+func addAssemblyMeta(doc *docparse.Document, merge *xnode) {
+	doc.Meta = &docparse.DocMeta{}
 	doc.Title = merge.child("title").flatText()
 	doc.Subtitle = merge.child("subtitle").flatText()
 	for _, m := range merge.children("meta") {
@@ -352,7 +315,7 @@ func addAssemblyMeta(doc *Document, merge *xnode) {
 				if doc.Distro.Name == "" {
 					doc.Distro.Name = p.flatText()
 				}
-				if v := p.attr["version"]; v != "" && !contains(doc.Distro.Versions, v) {
+				if v := p.attr["version"]; v != "" && !slices.Contains(doc.Distro.Versions, v) {
 					doc.Distro.Versions = append(doc.Distro.Versions, v)
 				}
 			}
@@ -362,29 +325,29 @@ func addAssemblyMeta(doc *Document, merge *xnode) {
 		doc.Title = doc.Meta.Title
 	}
 	for _, rev := range merge.find("revision") {
-		doc.Revisions = append(doc.Revisions, Revision{
+		doc.Revisions = append(doc.Revisions, docparse.Revision{
 			Date:        rev.child("date").flatText(),
 			Description: firstNonEmpty(rev.child("revdescription").flatText(), rev.child("revremark").flatText()),
 		})
 	}
 	if dm := merge.find("docmanager"); len(dm) > 0 {
 		if bt := dm[0].child("bugtracker"); bt != nil {
-			doc.Bugtracker = &Bugtracker{
+			doc.Bugtracker = &docparse.Bugtracker{
 				URL: bt.child("url").flatText(), Component: bt.child("component").flatText(),
 				Product: bt.child("product").flatText(), Assignee: bt.child("assignee").flatText(),
 			}
 		}
 		doc.Translation = dm[0].child("translation").flatText()
 	}
-	if reflect.DeepEqual(*doc.Meta, DocMeta{}) {
+	if reflect.DeepEqual(*doc.Meta, docparse.DocMeta{}) {
 		doc.Meta = nil
 	}
 }
 
 // addProfileVersions adds version numbers selected by PROFCONDITION, like 16.0.
-func addProfileVersions(d *Distro, prof profile) {
+func addProfileVersions(d *docparse.Distro, prof profile) {
 	for _, c := range prof.condition {
-		if reVersion.MatchString(c) && !contains(d.Versions, c) {
+		if reVersion.MatchString(c) && !slices.Contains(d.Versions, c) {
 			d.Versions = append(d.Versions, c)
 		}
 	}
@@ -409,7 +372,7 @@ func entityText(t *entityTable, name string, prof profile) string {
 func phrases(m *xnode) []string {
 	var out []string
 	for _, p := range m.children("phrase") {
-		if t := p.flatText(); t != "" && !contains(out, t) {
+		if t := p.flatText(); t != "" && !slices.Contains(out, t) {
 			out = append(out, t)
 		}
 	}
