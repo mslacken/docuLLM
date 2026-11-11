@@ -151,7 +151,11 @@ func TestDocBookFieldsNotExposed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c, err := loader.Load(root)
+	files, err := loader.Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := loader.Load(files)
 	if err != nil {
 		t.Fatal(err)
 	}

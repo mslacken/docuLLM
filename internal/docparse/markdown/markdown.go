@@ -4,7 +4,6 @@ package markdown
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,48 +16,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Load reads either a single (possibly combined) markdown file or a
-// directory tree of markdown files. In a directory, files that were produced
-// by combine.sh are skipped, as their content is already in the tree.
-func Load(root string) (*docparse.Corpus, error) {
-	st, err := os.Stat(root)
+// ReadFile reads the markdown file p. root is the directory p was found in,
+// or "" if p was named directly. A combined file (see combine.sh) is split
+// into its sources if it was named directly and skipped otherwise, as its
+// content is already in the tree.
+func ReadFile(p, root string) ([]Segment, error) {
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
-	if !st.IsDir() {
-		data, err := os.ReadFile(root)
-		if err != nil {
-			return nil, err
-		}
-		return BuildDocuments(SplitSources(data, root)), nil
+	if root == "" {
+		return SplitSources(data, p), nil
 	}
-	var segs []segment
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".md") {
-			return err
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if isCombined(data) {
-			fmt.Fprintln(os.Stderr, "skipping combined file", p)
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		segs = append(segs, newSegment(filepath.ToSlash(rel), p, strings.Split(string(data), "\n")))
-		return nil
-	})
+	if isCombined(data) {
+		fmt.Fprintln(os.Stderr, "skipping combined file", p)
+		return nil, nil
+	}
+	rel, err := filepath.Rel(root, p)
 	if err != nil {
 		return nil, err
 	}
-	if len(segs) == 0 {
-		return nil, fmt.Errorf("no markdown files found in %s", root)
-	}
-	return BuildDocuments(segs), nil
+	s := newSegment(filepath.ToSlash(rel), p, strings.Split(string(data), "\n"))
+	s.group = filepath.Dir(p)
+	return []Segment{s}, nil
 }
 
 func isCombined(data []byte) bool {
@@ -79,24 +59,30 @@ func documentID(file string) string {
 	return strings.TrimSuffix(path.Base(file), path.Ext(file))
 }
 
-// segment is one source file. For a combined file (see en-us/combine.sh) every
+// Segment is one source file. For a combined file (see en-us/combine.sh) every
 // `<!-- Source: ... -->` marker starts a new segment; lines[0] is line 1 of the
 // original file.
-type segment struct {
+type Segment struct {
 	file  string // original source file (from `<!-- Source: ... -->` or the input name)
 	name  string // file the content was parsed from (the combined file, or input name if not combined)
 	meta  map[string]any
+	group string // segments with the same group form one document (one directory per guide)
 	lines []string
 	body  int // index of the first line after the front matter
+}
+
+// key is the key of the lines of s, unique across files and roots.
+func (s Segment) key() string {
+	return s.name + "\x00" + s.file
 }
 
 var sourceMarker = regexp.MustCompile(`^<!-- Source: (.+?) -->\s*$`)
 
 // SplitSources splits the markdown in data into one segment per <!-- Source: -->
 // marker. For non combined input it returns a single segment named name.
-func SplitSources(data []byte, name string) []segment {
+func SplitSources(data []byte, name string) []Segment {
 	lines := strings.Split(string(data), "\n")
-	var segs []segment
+	var segs []Segment
 	file, start, combined := name, 0, false
 	for i, ln := range lines {
 		m := sourceMarker.FindStringSubmatch(ln)
@@ -105,17 +91,25 @@ func SplitSources(data []byte, name string) []segment {
 		}
 		// the preamble before the first marker is just the combine header
 		if combined {
-			segs = append(segs, newSegment(file, name, lines[start:i]))
+			segs = append(segs, newSourceSegment(file, name, lines[start:i]))
 		}
 		combined = true
 		file = m[1]
 		// combine.sh writes a blank line after the marker
 		start = min(i+2, len(lines))
 	}
-	return append(segs, newSegment(file, name, lines[start:]))
+	return append(segs, newSourceSegment(file, name, lines[start:]))
 }
 
-func newSegment(file, name string, lines []string) segment {
+// newSourceSegment is a segment of the file name, grouped by the directory of
+// its original source file.
+func newSourceSegment(file, name string, lines []string) Segment {
+	s := newSegment(file, name, lines)
+	s.group = name + "\x00" + path.Dir(file)
+	return s
+}
+
+func newSegment(file, name string, lines []string) Segment {
 	// drop the "\n---\n\n" separator combine.sh puts before the next marker
 	for len(lines) > 0 {
 		t := strings.TrimSpace(lines[len(lines)-1])
@@ -124,7 +118,7 @@ func newSegment(file, name string, lines []string) segment {
 		}
 		lines = lines[:len(lines)-1]
 	}
-	s := segment{file: file, name: name, lines: lines}
+	s := Segment{file: file, name: name, lines: lines}
 	if len(lines) > 0 && lines[0] == "---" {
 		for j := 1; j < len(lines); j++ {
 			if lines[j] == "---" {
@@ -149,7 +143,7 @@ var (
 	reFence = regexp.MustCompile("^\\s*(```|~~~)")
 )
 
-func headings(s segment) []heading {
+func headings(s Segment) []heading {
 	var hs []heading
 	fenced := false
 	for i := s.body; i < len(s.lines); i++ {
@@ -183,34 +177,39 @@ func metaString(meta map[string]any, key string) string {
 	return ""
 }
 
-// BuildDocuments groups segments by directory (one directory per guide) and
-// turns each group into a Document. The glossaries of all guides are merged
-// into the corpus wide glossary.
-func BuildDocuments(segs []segment) *docparse.Corpus {
-	var order []string
-	groups := map[string][]segment{}
-	for _, s := range segs {
-		dir := path.Dir(s.file)
-		if _, ok := groups[dir]; !ok {
-			order = append(order, dir)
-		}
-		groups[dir] = append(groups[dir], s)
-	}
+// BuildDocuments turns segments into a finished corpus, see Build.
+func BuildDocuments(segs []Segment) *docparse.Corpus {
 	c := docparse.NewCorpus()
-	for _, s := range segs {
-		c.AddLines(s.file, s.lines)
-	}
-	for _, dir := range order {
-		doc, glossary := buildDocument(groups[dir])
-		doc.ID = documentID(groups[dir][0].file)
-		c.AddDocument(doc)
-		c.AddGlossary(glossary)
-	}
+	c.Add(Build(segs))
 	c.Finish()
 	return c
 }
 
-func buildDocument(segs []segment) (docparse.Document, []docparse.GlossaryEntry) {
+// Build groups segments by directory (one directory per guide) and turns each
+// group into a Document. The glossaries of all guides are merged.
+func Build(segs []Segment) docparse.Part {
+	var order []string
+	groups := map[string][]Segment{}
+	for _, s := range segs {
+		if _, ok := groups[s.group]; !ok {
+			order = append(order, s.group)
+		}
+		groups[s.group] = append(groups[s.group], s)
+	}
+	p := docparse.Part{Lines: map[string][]string{}}
+	for _, s := range segs {
+		p.Lines[s.key()] = s.lines
+	}
+	for _, g := range order {
+		doc, glossary := buildDocument(groups[g])
+		doc.ID = documentID(groups[g][0].file)
+		p.Documents = append(p.Documents, doc)
+		p.Glossary = append(p.Glossary, glossary...)
+	}
+	return p
+}
+
+func buildDocument(segs []Segment) (docparse.Document, []docparse.GlossaryEntry) {
 	doc := docparse.Document{Chapters: []docparse.Chapter{}}
 	var glossary []docparse.GlossaryEntry
 	var legal, licenseFile []string
@@ -257,7 +256,7 @@ func buildDocument(segs []segment) (docparse.Document, []docparse.GlossaryEntry)
 	return doc, glossary
 }
 
-func addDistro(d *docparse.Distro, s segment) {
+func addDistro(d *docparse.Distro, s Segment) {
 	product, version := metaString(s.meta, "product"), metaString(s.meta, "version")
 	if product == "" || version == "" {
 		// fall back to the "Applies to PRODUCT VERSION" line below the front matter
@@ -279,7 +278,7 @@ func addDistro(d *docparse.Distro, s segment) {
 // addChapters appends one Chapter per top level section of s and returns the
 // text of the legal notice section(s) and the glossary sections, which are not
 // treated as chapters.
-func addChapters(doc *docparse.Document, s segment, hs []heading) ([]string, []docparse.GlossaryEntry) {
+func addChapters(doc *docparse.Document, s Segment, hs []heading) ([]string, []docparse.GlossaryEntry) {
 	level, h1 := 2, 0
 	for _, h := range hs {
 		if h.level == 1 {
@@ -328,7 +327,7 @@ func addChapters(doc *docparse.Document, s segment, hs []heading) ([]string, []d
 			SourcePath: sourcePath,
 			Commands:   a.Commands,
 			Summary:    a.Lead,
-			LinesKey:   s.file,
+			LinesKey:   s.key(),
 			Prose:      a.Prose,
 		})
 	}

@@ -1,6 +1,7 @@
 package docbook
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -257,8 +258,32 @@ func docbookFixture(t *testing.T) string {
 	return writeFiles(t, files)
 }
 
+// loadCorpus reads the DC files names of root, or all of them if none are
+// given, through one shared Loader. As in the loader package, unreadable DC
+// files are skipped and it is an error if none is left.
+func loadCorpus(root string, names ...string) (*docparse.Corpus, error) {
+	if len(names) == 0 {
+		names = DCFiles(root)
+	}
+	l := NewLoader(root)
+	c := docparse.NewCorpus()
+	for _, name := range names {
+		p, err := l.Read(name)
+		if err != nil {
+			warnf("skipping %s: %v", name, err)
+			continue
+		}
+		c.Add(p)
+	}
+	if len(c.Documents) == 0 {
+		return nil, fmt.Errorf("no usable DC files in %s", root)
+	}
+	c.Finish()
+	return c, nil
+}
+
 func TestDocBookCorpus(t *testing.T) {
-	c, err := Load(docbookFixture(t))
+	c, err := loadCorpus(docbookFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,14 +419,14 @@ func TestDocBookCorpus(t *testing.T) {
 
 func TestSingleDCFile(t *testing.T) {
 	root := docbookFixture(t)
-	c, err := Load(filepath.Join(root, "DC-SLES-demo"))
+	c, err := loadCorpus(root, "DC-SLES-demo")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(c.Documents) != 1 || c.Documents[0].ID != "sles-demo" {
 		t.Errorf("documents = %+v", c.Documents)
 	}
-	if _, err := Load(filepath.Join(root, "DC-SLES-gone")); err == nil {
+	if _, err := loadCorpus(root, "DC-SLES-gone"); err == nil {
 		t.Error("expected error for a DC file without assembly")
 	}
 }

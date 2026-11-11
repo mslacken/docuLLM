@@ -111,6 +111,20 @@ func commandsIn(children []node) []string {
 	return out
 }
 
+// CommandsInText returns the shell commands of the lines of text that start
+// with a prompt, without the prompt and without duplicates.
+func CommandsInText(text string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, cmd := range commandsInBlock(text) {
+		if !seen[cmd] {
+			seen[cmd] = true
+			out = append(out, cmd)
+		}
+	}
+	return out
+}
+
 func commandsInBlock(text string) []string {
 	lines := strings.Split(text, "\n")
 	var out []string

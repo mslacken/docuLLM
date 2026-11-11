@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // xnode is an element or text node of a decoded DocBook file.
@@ -35,9 +36,11 @@ const xincludeNS = "http://www.w3.org/2001/XInclude"
 const includeNode = "#include"
 
 // xmlLoader parses DocBook files once and caches them, as topics and
-// snippets are shared by many assemblies.
+// snippets are shared by many assemblies. It is safe for concurrent use; the
+// parsed trees are not modified after loading.
 type xmlLoader struct {
-	root    string // corpus root, file names are reported relative to it
+	root    string     // corpus root, file names are reported relative to it
+	mu      sync.Mutex // guards the caches below and those of ents
 	ents    *entityLoader
 	files   map[string]*xfile
 	errs    map[string]error
@@ -58,6 +61,13 @@ func (l *xmlLoader) rel(p string) string {
 
 // load returns the parsed file p.
 func (l *xmlLoader) load(p string) (*xfile, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loadLocked(p)
+}
+
+// loadLocked is load for callers holding l.mu.
+func (l *xmlLoader) loadLocked(p string) (*xfile, error) {
 	p = filepath.Clean(p)
 	if f, ok := l.files[p]; ok {
 		return f, nil
@@ -161,7 +171,7 @@ func (l *xmlLoader) resolveIncludes(n *xnode, dir string) {
 		}
 		p := filepath.Join(dir, href)
 		inc := &xnode{name: includeNode, attr: map[string]string{"href": l.rel(p)}}
-		if f, err := l.load(p); err != nil {
+		if f, err := l.loadLocked(p); err != nil {
 			warnf("xinclude: %v", err)
 		} else {
 			inc.kids = []*xnode{f.root}

@@ -16,7 +16,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 
 	"docullm/internal/docparse"
 )
@@ -36,16 +35,16 @@ func warnf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "docbook: "+format+"\n", args...)
 }
 
-// dcFiles returns the names of the DC files at the top level of dir, sorted.
+// DCFiles returns the names of the DC files at the top level of dir, sorted.
 // Disabled ones (_DC-*) do not match.
-func dcFiles(dir string) []string {
+func DCFiles(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	var out []string
 	for _, e := range entries {
-		if !e.IsDir() && isDCFile(e.Name()) {
+		if !e.IsDir() && IsDCFile(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}
@@ -84,73 +83,43 @@ func dcDocID(name string) string {
 	return docparse.Slug(strings.TrimPrefix(name, "DC-"))
 }
 
-// Detect reports whether root is a DC file or a directory with DC files at
-// its top level.
-func Detect(root string) bool {
-	if st, err := os.Stat(root); err != nil || !st.IsDir() {
-		return isDCFile(root)
-	}
-	return len(dcFiles(root)) > 0
-}
-
-func isDCFile(p string) bool {
+// IsDCFile reports whether p names a DC file.
+func IsDCFile(p string) bool {
 	return strings.HasPrefix(filepath.Base(p), "DC-")
 }
 
-// Load builds the corpus from a single DC file or from all DC files at the
-// top level of the directory root.
-func Load(root string) (*docparse.Corpus, error) {
-	st, err := os.Stat(root)
-	if err != nil {
-		return nil, err
-	}
-	if !st.IsDir() {
-		return load(filepath.Dir(root), []string{filepath.Base(root)})
-	}
-	return load(root, dcFiles(root))
+// Loader reads the DC files of one corpus root. The topics, snippets and
+// entity files are parsed once and shared by all DC files read through the
+// same Loader. It is safe for concurrent use.
+type Loader struct {
+	xml *xmlLoader
 }
 
-// load builds the corpus from the given DC files in root. Each DC file is
-// parsed by its own loader in parallel; the corpus is then filled in file
-// order, so that the document order and the first definition winning for a
-// glossary term stay deterministic.
-func load(root string, dcs []string) (*docparse.Corpus, error) {
-	type result struct {
-		doc      docparse.Document
-		glossary []docparse.GlossaryEntry
-		lines    []string
-		err      error
-	}
-	results := make([]result, len(dcs))
-	var wg sync.WaitGroup
-	for i, name := range dcs {
-		wg.Add(1)
-		go func(i int, name string) {
-			defer wg.Done()
-			debugf("Reading file: %s", name)
-			doc, glossary, lines, err := newXMLLoader(root).buildDocBook(name)
-			results[i] = result{doc: doc, glossary: glossary, lines: lines, err: err}
-		}(i, name)
-	}
-	wg.Wait()
+// NewLoader returns a Loader for the DC files at the top level of root.
+func NewLoader(root string) *Loader {
+	return &Loader{xml: newXMLLoader(root)}
+}
 
-	c := docparse.NewCorpus()
-	for i, name := range dcs {
-		r := results[i]
-		if r.err != nil {
-			warnf("skipping %s: %v", name, r.err)
-			continue
-		}
-		r.doc.ID = dcDocID(name)
-		c.AddLines(name, r.lines)
-		c.AddDocument(r.doc)
-		c.AddGlossary(r.glossary)
+// Read turns the DC file name, relative to the root of the loader, into a
+// part holding one document, the glossary entries it contains and the
+// markdown lines of its chapters.
+func (l *Loader) Read(name string) (docparse.Part, error) {
+	debugf("Reading file: %s", name)
+	doc, glossary, lines, err := l.xml.buildDocBook(name)
+	if err != nil {
+		return docparse.Part{}, err
 	}
-	if len(c.Documents) == 0 {
-		return nil, fmt.Errorf("no usable DC files found in %s", root)
-	}
-	c.Finish()
-	return c, nil
+	doc.ID = dcDocID(name)
+	return docparse.Part{
+		Documents: []docparse.Document{doc},
+		Glossary:  glossary,
+		Lines:     map[string][]string{l.xml.linesKey(name): lines},
+	}, nil
+}
+
+// linesKey is the key of the lines of the DC file name, unique across roots.
+func (l *xmlLoader) linesKey(name string) string {
+	return filepath.Join(l.root, name)
 }
 
 // dbModule is a <module> of an assembly structure with its topic loaded.
@@ -205,10 +174,10 @@ func (l *xmlLoader) buildDocBook(name string) (docparse.Document, []docparse.Glo
 	merge := st.child("merge")
 	addAssemblyMeta(&doc, merge)
 	if doc.Distro.Name == "" {
-		doc.Distro.Name = entityText(f.ents, "productname", prof)
+		doc.Distro.Name = l.entityText(f.ents, "productname", prof)
 	}
 	if len(doc.Distro.Versions) == 0 {
-		if v := entityText(f.ents, "productnumber", prof); v != "" {
+		if v := l.entityText(f.ents, "productnumber", prof); v != "" {
 			doc.Distro.Versions = []string{v}
 		}
 	}
@@ -241,7 +210,7 @@ func (l *xmlLoader) buildDocBook(name string) (docparse.Document, []docparse.Glo
 			ch, text := r.chapter(m, len(lines))
 			lines = append(lines, text...)
 			ch.ID = docparse.UniqueID(chapterIDs, firstNonEmpty(m.id, docparse.Slug(m.title)))
-			ch.LinesKey = name
+			ch.LinesKey = l.linesKey(name)
 			doc.Chapters = append(doc.Chapters, ch)
 		}
 	}
@@ -355,11 +324,15 @@ func addProfileVersions(d *docparse.Distro, prof profile) {
 
 // entityText returns the profiled text of the entity name, e.g. the product
 // name for the DC's PROFOS out of the per product phrases of &productname;.
-func entityText(t *entityTable, name string, prof profile) string {
+func (l *xmlLoader) entityText(t *entityTable, name string, prof profile) string {
 	if t == nil || t.values[name] == "" {
 		return ""
 	}
-	n, err := decodeXML("<phrase>" + t.expand("&"+name+";") + "</phrase>")
+	// expand memoizes into the table, which is shared through the cache
+	l.mu.Lock()
+	text := t.expand("&" + name + ";")
+	l.mu.Unlock()
+	n, err := decodeXML("<phrase>" + text + "</phrase>")
 	if err != nil {
 		debugf("entity %s: %v", name, err)
 		return ""

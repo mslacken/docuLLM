@@ -18,16 +18,36 @@ type Corpus struct {
 	Documents []Document      `json:"documents" yaml:"documents"`
 	Glossary  []GlossaryEntry `json:"glossary" yaml:"glossary"`
 
-	lines map[string][]string // source -> lines, see Chapter.LinesKey
-	ids   map[string]int      // document ids handed out, see AddDocument
-	df    map[string]int      // number of chapters containing a word, for search
-	total int                 // number of chapters
+	lines    map[string][]string // source -> lines, see Chapter.LinesKey
+	ids      map[string]int      // document ids handed out, see AddDocument
+	df       map[string]int      // number of chapters containing a word, for search
+	total    int                 // number of chapters
+	commands []CommandHit        // every command of every chapter, see FindCommand
+}
+
+// Part is what a parser read from one or more input files: the documents, the
+// glossary entries they define and the source lines their chapters refer to.
+type Part struct {
+	Documents []Document
+	Glossary  []GlossaryEntry
+	Lines     map[string][]string // see Corpus.AddLines
 }
 
 // NewCorpus returns an empty corpus for a parser to fill with AddLines,
 // AddDocument and AddGlossary. Finish must be called once it is complete.
 func NewCorpus() *Corpus {
 	return &Corpus{Documents: []Document{}, lines: map[string][]string{}, ids: map[string]int{}}
+}
+
+// Add merges the documents, glossary and lines of p into the corpus.
+func (c *Corpus) Add(p Part) {
+	for k, lines := range p.Lines {
+		c.AddLines(k, lines)
+	}
+	for _, doc := range p.Documents {
+		c.AddDocument(doc)
+	}
+	c.AddGlossary(p.Glossary)
 }
 
 // AddLines stores the lines of a source; chapters refer to them by their
@@ -63,7 +83,8 @@ func (c *Corpus) term(term string) *GlossaryEntry {
 }
 
 // Finish sorts the glossary, records which glossary terms every chapter
-// mentions and builds the document frequencies used by search.
+// mentions, builds the document frequencies used by search and the index of
+// commands used by FindCommand.
 func (c *Corpus) Finish() {
 	sort.Slice(c.Glossary, func(i, j int) bool {
 		return strings.ToLower(c.Glossary[i].Term) < strings.ToLower(c.Glossary[j].Term)
@@ -73,6 +94,8 @@ func (c *Corpus) Finish() {
 		c.Glossary[i].needles = glossaryNeedles(c.Glossary[i].Term)
 	}
 	c.df = map[string]int{}
+	c.total = 0
+	c.commands = nil
 	// DocBook documents share topics, so the same prose shows up many times
 	terms := map[string][]string{}
 	for d := range c.Documents {
@@ -85,6 +108,9 @@ func (c *Corpus) Finish() {
 			}
 			ch.Terms = t
 			c.total++
+			for _, cmd := range ch.Commands {
+				c.commands = append(c.commands, CommandHit{Command: cmd, DocID: c.Documents[d].ID, ChapterID: ch.ID, Title: ch.Title})
+			}
 			seen := map[string]bool{}
 			for _, w := range words(ch.Title + " " + c.Text(ch)) {
 				if !seen[w] {
@@ -402,22 +428,18 @@ type CommandHit struct {
 func (c *Corpus) FindCommand(pattern string, docIDs []string) []CommandHit {
 	q := strings.Fields(strings.ToLower(pattern))
 	var out []CommandHit
-	for _, doc := range c.Documents {
-		if !docIn(docIDs, doc.ID) {
+cmds:
+	for _, hit := range c.commands {
+		if !docIn(docIDs, hit.DocID) {
 			continue
 		}
-		for _, ch := range doc.Chapters {
-		cmds:
-			for _, cmd := range ch.Commands {
-				l := strings.ToLower(cmd)
-				for _, w := range q {
-					if !strings.Contains(l, w) {
-						continue cmds
-					}
-				}
-				out = append(out, CommandHit{Command: cmd, DocID: doc.ID, ChapterID: ch.ID, Title: ch.Title})
+		l := strings.ToLower(hit.Command)
+		for _, w := range q {
+			if !strings.Contains(l, w) {
+				continue cmds
 			}
 		}
+		out = append(out, hit)
 	}
 	return out
 }
