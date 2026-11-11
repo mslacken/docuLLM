@@ -74,6 +74,16 @@ func PageFuncs() template.FuncMap {
 		"clean": func(title string, d, p any) string {
 			return CleanTitle(title, decodeAs[docparse.Distro](d), decodeAs[docparse.Product](p))
 		},
+		// has reports whether id is one of the comma-separated ids in list,
+		// for preselecting a multi-select of documents.
+		"has": func(list, id string) bool {
+			for _, v := range strings.Split(list, ",") {
+				if strings.TrimSpace(v) == id {
+					return true
+				}
+			}
+			return false
+		},
 		"markdown": func(md string) template.HTML { return markdownToHTML(md) },
 	}
 }

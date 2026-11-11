@@ -69,12 +69,13 @@ type ReadDocumentOut struct {
 }
 
 type searchDocsIn struct {
-	Query   string `json:"query" jsonschema:"search words"`
-	Product string `json:"product,omitempty" jsonschema:"only documents whose product contains this text"`
-	Version string `json:"version,omitempty" jsonschema:"only documents for this product version"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"maximum number of hits, default 10"`
-	Fuzzy   int    `json:"fuzzy,omitempty" jsonschema:"maximum edit distance for a word to still match, default 1 (0 disables fuzzy)"`
-	Regex   bool   `json:"regex,omitempty" jsonschema:"treat query as a regular expression instead of words"`
+	Query   string   `json:"query" jsonschema:"search words"`
+	Product string   `json:"product,omitempty" jsonschema:"only documents whose product contains this text"`
+	Version string   `json:"version,omitempty" jsonschema:"only documents for this product version"`
+	Limit   int      `json:"limit,omitempty" jsonschema:"maximum number of hits, default 10"`
+	Fuzzy   int      `json:"fuzzy,omitempty" jsonschema:"maximum edit distance for a word to still match, default 1 (0 disables fuzzy)"`
+	Regex   bool     `json:"regex,omitempty" jsonschema:"treat query as a regular expression instead of words"`
+	Docs    []string `json:"docs,omitempty" jsonschema:"only search in the documents with these ids, as returned by list_documents; empty searches the whole corpus"`
 }
 
 type SearchDocsOut struct {
@@ -82,7 +83,8 @@ type SearchDocsOut struct {
 }
 
 type findCommandIn struct {
-	Pattern string `json:"pattern" jsonschema:"words the command must contain, e.g. 'crm configure primitive'"`
+	Pattern string   `json:"pattern" jsonschema:"words the command must contain, e.g. 'crm configure primitive'"`
+	Docs    []string `json:"docs,omitempty" jsonschema:"only search in the documents with these ids, as returned by list_documents; empty searches the whole corpus"`
 }
 
 type FindCommandOut struct {
@@ -90,7 +92,8 @@ type FindCommandOut struct {
 }
 
 type defineTermIn struct {
-	Term string `json:"term" jsonschema:"glossary term or abbreviation, e.g. 'CIB' or 'split brain'"`
+	Term string   `json:"term" jsonschema:"glossary term or abbreviation, e.g. 'CIB' or 'split brain'"`
+	Docs []string `json:"docs,omitempty" jsonschema:"only look in documents with these ids, as returned by list_documents; empty searches all documents"`
 }
 
 type DefineTermOut struct {
@@ -147,24 +150,26 @@ func ListDocuments(c *docparse.Corpus, product, version string) ListDocumentsOut
 	return out
 }
 
-// SearchDocs ranks chapters for query, optionally filtered by product/version.
-// fuzzy is the maximum edit distance allowed for a word match; regex treats the
-// query as a regular expression.
-func SearchDocs(c *docparse.Corpus, query, product, version string, limit, fuzzy int, regex bool) SearchDocsOut {
+// SearchDocs ranks chapters for query, optionally filtered by product/version
+// and restricted to the documents in docs. fuzzy is the maximum edit distance
+// allowed for a word match; regex treats the query as a regular expression.
+func SearchDocs(c *docparse.Corpus, query, product, version string, limit, fuzzy int, regex bool, docs []string) SearchDocsOut {
 	if limit <= 0 {
 		limit = 10
 	}
-	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, limit, fuzzy, regex))}
+	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, limit, fuzzy, regex, docs))}
 }
 
-// FindCommand returns the documented commands containing every word of pattern.
-func FindCommand(c *docparse.Corpus, pattern string) FindCommandOut {
-	return FindCommandOut{Commands: nonNil(c.FindCommand(pattern))}
+// FindCommand returns the documented commands containing every word of pattern,
+// optionally restricted to the documents in docs.
+func FindCommand(c *docparse.Corpus, pattern string, docs []string) FindCommandOut {
+	return FindCommandOut{Commands: nonNil(c.FindCommand(pattern, docs))}
 }
 
-// DefineTerm looks up term in the glossary, falling back to partial matches.
-func DefineTerm(c *docparse.Corpus, term string) DefineTermOut {
-	return DefineTermOut{Entries: nonNil(c.DefineTerm(term))}
+// DefineTerm looks up term in the glossary, falling back to partial matches,
+// optionally restricted to the documents in docs.
+func DefineTerm(c *docparse.Corpus, term string, docs []string) DefineTermOut {
+	return DefineTermOut{Entries: nonNil(c.DefineTerm(term, docs))}
 }
 
 // corpusSummary is the shape of the corpus overview endpoint.
@@ -251,6 +256,20 @@ func CreateSearchDocsSchema(c *docparse.Corpus) *jsonschema.Schema {
 	return schema
 }
 
+// CreateDefineTermSchema returns the input schema for define_term with term
+// restricted to the glossary terms present in the corpus.
+func CreateDefineTermSchema(c *docparse.Corpus) *jsonschema.Schema {
+	schema, _ := jsonschema.For[defineTermIn](nil)
+	if schema != nil {
+		terms := make([]string, 0, len(c.Glossary))
+		for i := range c.Glossary {
+			terms = append(terms, c.Glossary[i].Term)
+		}
+		setEnum(schema, "term", terms)
+	}
+	return schema
+}
+
 // NewServer builds the MCP server exposing the corpus' documents.
 func NewServer(c *docparse.Corpus) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "docullm", Version: "0.1.0"}, &mcp.ServerOptions{
@@ -284,8 +303,8 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 		Description: "Full text search over all chapters. Returns ranked hits with doc_id and chapter_id for read_document.",
 		InputSchema: CreateSearchDocsSchema(c),
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchDocsIn) (*mcp.CallToolResult, SearchDocsOut, error) {
-		debugf("search_docs query=%q product=%q version=%q limit=%d fuzzy=%d regex=%v", in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex)
-		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex)
+		debugf("search_docs query=%q product=%q version=%q limit=%d fuzzy=%d regex=%v docs=%q", in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex, in.Docs)
+		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex, in.Docs)
 		debugf("search_docs result: %d hits", len(out.Hits))
 		return nil, out, nil
 	})
@@ -294,8 +313,8 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 		Name:        "find_command",
 		Description: "Find the documented shell commands containing all given words and the chapters showing them.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in findCommandIn) (*mcp.CallToolResult, FindCommandOut, error) {
-		debugf("find_command pattern=%q", in.Pattern)
-		out := FindCommand(c, in.Pattern)
+		debugf("find_command pattern=%q docs=%q", in.Pattern, in.Docs)
+		out := FindCommand(c, in.Pattern, in.Docs)
 		debugf("find_command result: %d commands", len(out.Commands))
 		return nil, out, nil
 	})
@@ -303,9 +322,10 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "define_term",
 		Description: "Look up a term or abbreviation in the glossary.",
+		InputSchema: CreateDefineTermSchema(c),
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in defineTermIn) (*mcp.CallToolResult, DefineTermOut, error) {
-		debugf("define_term term=%q", in.Term)
-		out := DefineTerm(c, in.Term)
+		debugf("define_term term=%q docs=%q", in.Term, in.Docs)
+		out := DefineTerm(c, in.Term, in.Docs)
 		debugf("define_term result: %d entries", len(out.Entries))
 		return nil, out, nil
 	})

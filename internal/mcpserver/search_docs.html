@@ -15,6 +15,16 @@
         {{range enum "search_docs" "version"}}<option value="{{esc .}}" {{if eq . $.Args.version}}selected{{end}}>{{esc .}}</option>{{end}}
       </select>
     </div>
+    <div class="span2"><label>Documents <span class="hint">only search the checked documents, none checked = whole corpus</span></label>
+      <details class="docs-toggle" {{if .Args.docs}}open{{end}}>
+        <summary>Choose documents ({{if .Args.docs}}some selected{{else}}all{{end}})</summary>
+        <div class="docs">
+          {{with allDocs}}{{if .Out.documents}}{{range .Out.documents}}
+            <label class="check"><input type="checkbox" name="docs" value="{{esc .id}}" {{if has $.Args.docs .id}}checked{{end}}>{{esc (clean .title .distro .product)}} <span class="pill">{{esc .id}}</span></label>
+          {{end}}{{end}}{{end}}
+        </div>
+      </details>
+    </div>
     <div><label>Limit <span class="hint">default 10</span></label><input name="limit" type="number" min="1" value="{{.Args.limit}}" placeholder="10"></div>
     <div><label>Fuzzy <span class="hint">max typos, 0 = exact, default 1</span></label><input name="fuzzy" type="number" min="0" max="3" value="{{if .Args.fuzzy}}{{.Args.fuzzy}}{{else}}1{{end}}"></div>
     <div><label>Regex <span class="hint">match the query as a pattern</span></label>

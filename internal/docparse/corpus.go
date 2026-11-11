@@ -218,7 +218,8 @@ type SearchHit struct {
 }
 
 // Search ranks chapters for query, optionally filtered by product and version,
-// keeping at most limit hits (0 = no limit).
+// keeping at most limit hits (0 = no limit). If docIDs is non-empty, only the
+// documents with those ids are searched; otherwise the whole corpus is searched.
 //
 // By default the query is split into words and each word is scored against
 // every chapter. A word matches corpus words within fuzzy edits of it (fuzzy
@@ -230,19 +231,25 @@ type SearchHit struct {
 // If regex is set, the query is instead a regular expression (RE2 syntax)
 // matched against each chapter's title, summary and text, and the matching
 // chapters are returned in document order.
-func (c *Corpus) Search(query, product, version string, limit, fuzzy int, regex bool) []SearchHit {
+func (c *Corpus) Search(query, product, version string, limit, fuzzy int, regex bool, docIDs []string) []SearchHit {
 	if fuzzy < 0 {
 		fuzzy = 0
 	}
 	if regex {
-		return c.searchRegex(query, product, version, limit)
+		return c.searchRegex(query, product, version, limit, docIDs)
 	}
-	return c.searchWords(query, product, version, limit, fuzzy)
+	return c.searchWords(query, product, version, limit, fuzzy, docIDs)
+}
+
+// docIn reports whether doc is part of the search, i.e. its id is in docIDs if
+// that list is non-empty, and everything is in otherwise.
+func docIn(docIDs []string, id string) bool {
+	return len(docIDs) == 0 || slices.Contains(docIDs, id)
 }
 
 // searchWords scores each chapter that passes the product/version filter by
 // how well the words of query match it, and returns them best first.
-func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int) []SearchHit {
+func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int, docIDs []string) []SearchHit {
 	q := words(query)
 	if len(q) == 0 {
 		return nil
@@ -250,7 +257,7 @@ func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int) [
 	var hits []SearchHit
 	for d := range c.Documents {
 		doc := &c.Documents[d]
-		if !doc.Matches(product, version) {
+		if !doc.Matches(product, version) || !docIn(docIDs, doc.ID) {
 			continue
 		}
 		for i := range doc.Chapters {
@@ -308,7 +315,7 @@ func newSearchHit(doc *Document, ch *Chapter, raw string, q []string, score floa
 // searchRegex matches the regular expression query against each chapter's
 // title, summary and text and returns the hits in document order. An invalid
 // pattern yields no hits.
-func (c *Corpus) searchRegex(query, product, version string, limit int) []SearchHit {
+func (c *Corpus) searchRegex(query, product, version string, limit int, docIDs []string) []SearchHit {
 	re, err := regexp.Compile(query)
 	if err != nil {
 		return nil
@@ -316,7 +323,7 @@ func (c *Corpus) searchRegex(query, product, version string, limit int) []Search
 	var hits []SearchHit
 	for d := range c.Documents {
 		doc := &c.Documents[d]
-		if !doc.Matches(product, version) {
+		if !doc.Matches(product, version) || !docIn(docIDs, doc.ID) {
 			continue
 		}
 		for i := range doc.Chapters {
@@ -390,11 +397,15 @@ type CommandHit struct {
 }
 
 // FindCommand returns the commands that contain every word of pattern, case
-// insensitive.
-func (c *Corpus) FindCommand(pattern string) []CommandHit {
+// insensitive. If docIDs is non-empty, only the documents with those ids are
+// searched; otherwise the whole corpus is searched.
+func (c *Corpus) FindCommand(pattern string, docIDs []string) []CommandHit {
 	q := strings.Fields(strings.ToLower(pattern))
 	var out []CommandHit
 	for _, doc := range c.Documents {
+		if !docIn(docIDs, doc.ID) {
+			continue
+		}
 		for _, ch := range doc.Chapters {
 		cmds:
 			for _, cmd := range ch.Commands {
@@ -412,10 +423,31 @@ func (c *Corpus) FindCommand(pattern string) []CommandHit {
 }
 
 // DefineTerm looks up a term by its full name or one of its aliases. If
-// nothing matches exactly, all terms containing the query are returned.
-func (c *Corpus) DefineTerm(term string) []GlossaryEntry {
+// nothing matches exactly, all terms containing the query are returned. If
+// docIDs is non-empty, only terms mentioned in the documents with those ids
+// are returned; otherwise the whole glossary is searched.
+func (c *Corpus) DefineTerm(term string, docIDs []string) []GlossaryEntry {
 	t := strings.ToLower(strings.TrimSpace(term))
+	inScope := func(e *GlossaryEntry) bool {
+		if len(docIDs) == 0 {
+			return true
+		}
+		for _, doc := range c.Documents {
+			if !docIn(docIDs, doc.ID) {
+				continue
+			}
+			for i := range doc.Chapters {
+				if slices.Contains(doc.Chapters[i].Terms, e.Term) {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	for _, e := range c.Glossary {
+		if !inScope(&e) {
+			continue
+		}
 		if strings.ToLower(e.Term) == t {
 			return []GlossaryEntry{e}
 		}
@@ -427,7 +459,10 @@ func (c *Corpus) DefineTerm(term string) []GlossaryEntry {
 	}
 	var out []GlossaryEntry
 	for _, e := range c.Glossary {
-		if t != "" && strings.Contains(strings.ToLower(e.Term), t) {
+		if t == "" || !inScope(&e) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(e.Term), t) {
 			out = append(out, e)
 		}
 	}

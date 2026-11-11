@@ -46,12 +46,37 @@ type webApp struct {
 	tmpl    *template.Template
 }
 
+// jsonType unmarshals a JSON Schema "type" field, which may be a string or an
+// array of strings.
+type jsonType struct {
+	Name string
+}
+
+func (t *jsonType) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		t.Name = s
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err != nil {
+		return err
+	}
+	for _, a := range arr {
+		if a != "null" {
+			t.Name = a
+			return nil
+		}
+	}
+	return nil
+}
+
 // inputSchema is the part of a tool's JSON input schema the web interface
 // needs: the argument types (to convert form values) and their enums (to fill
 // the form's select boxes).
 type inputSchema struct {
 	Properties map[string]struct {
-		Type string   `json:"type"`
+		Type jsonType `json:"type"`
 		Enum []string `json:"enum"`
 	} `json:"properties"`
 }
@@ -140,7 +165,7 @@ func (a *webApp) callTool(name string, args map[string]string) toolResult {
 		if v == "" {
 			continue
 		}
-		switch schema.Properties[k].Type {
+		switch schema.Properties[k].Type.Name {
 		case "integer":
 			if n, err := strconv.Atoi(v); err == nil {
 				in[k] = n
@@ -148,6 +173,15 @@ func (a *webApp) callTool(name string, args map[string]string) toolResult {
 			}
 		case "boolean":
 			in[k] = true // a checked checkbox submits "on"
+			continue
+		case "array":
+			var items []string
+			for _, s := range strings.Split(v, ",") {
+				if s = strings.TrimSpace(s); s != "" {
+					items = append(items, s)
+				}
+			}
+			in[k] = items
 			continue
 		}
 		in[k] = v
@@ -186,14 +220,15 @@ func (a *webApp) enum(tool, prop string) []string {
 }
 
 // args collects the arguments of tool from the request: path values (e.g.
-// {doc_id}) first, then query parameters. Every schema property gets an entry,
-// so templates can use .Args.<name> for the form values.
+// {doc_id}) first, then query parameters. Multi-valued parameters (e.g. from a
+// <select multiple>) are joined with commas. Every schema property gets an
+// entry, so templates can use .Args.<name> for the form values.
 func (a *webApp) args(tool string, r *http.Request) map[string]string {
 	out := map[string]string{}
 	for prop := range a.schemas[tool].Properties {
 		v := r.PathValue(prop)
 		if v == "" {
-			v = r.URL.Query().Get(prop)
+			v = strings.Join(r.URL.Query()[prop], ",")
 		}
 		out[prop] = v
 	}
@@ -208,6 +243,7 @@ func (a *webApp) newTemplate() (*template.Template, error) {
 	funcs := mcpserver.PageFuncs()
 	funcs["tool"] = a.callTool
 	funcs["enum"] = a.enum
+	funcs["allDocs"] = func() toolResult { return a.callTool("list_documents", map[string]string{}) }
 	tmpl, err := template.New("page").Funcs(funcs).ParseFS(ui, "ui.html")
 	if err != nil {
 		return nil, err

@@ -1,8 +1,18 @@
 {{define "find_command"}}
   <h2>Find command</h2>
-  <p class="desc">Locate shell commands that contain every given word and the chapters that show them.</p>
+  <p class="desc">Locate shell commands that contain every given word and the chapters that show them. Optionally limit the search to certain documents.</p>
   <form method="get" action="/command" class="grid">
     <div class="span2"><label>Pattern <span class="req">*</span> <span class="hint">words the command must contain</span></label><input name="pattern" value="{{esc .Args.pattern}}" placeholder="e.g. crm configure primitive"></div>
+    <div class="span2"><label>Documents <span class="hint">only search the checked documents, none checked searches the whole corpus</span></label>
+      <details class="docs-toggle" {{if .Args.docs}}open{{end}}>
+        <summary>Choose documents ({{if .Args.docs}}some selected{{else}}all{{end}})</summary>
+        <div class="docs">
+          {{with allDocs}}{{if .Out.documents}}{{range .Out.documents}}
+            <label class="check"><input type="checkbox" name="docs" value="{{esc .id}}" {{if has $.Args.docs .id}}checked{{end}}>{{esc (clean .title .distro .product)}} <span class="pill">{{esc .id}}</span></label>
+          {{end}}{{end}}{{end}}
+        </div>
+      </details>
+    </div>
     <button class="run" type="submit">Find</button>
   </form>
   {{if .Args.pattern}}{{with tool "find_command" .Args}}

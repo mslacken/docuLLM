@@ -366,14 +366,29 @@ func TestDocBookCorpus(t *testing.T) {
 	if len(c.Glossary) != 2 || c.Glossary[0].Term != want[0].Term || c.Glossary[0].WhatIs != want[0].WhatIs || c.Glossary[1].WhatIs != want[1].WhatIs {
 		t.Errorf("glossary = %+v", c.Glossary)
 	}
-	if hits := c.FindCommand("zypper"); len(hits) != 2 {
+	if hits := c.FindCommand("zypper", nil); len(hits) != 2 {
 		t.Errorf("find zypper = %+v", hits)
 	}
-	if hits := c.Search("reboot", "for SAP", "", 0, 1, false); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+	if hits := c.FindCommand("zypper", []string{"sles-demo"}); len(hits) != 1 || hits[0].DocID != "sles-demo" {
+		t.Errorf("find zypper (sles-demo) = %+v", hits)
+	}
+	if hits := c.FindCommand("zypper", []string{"sap-demo"}); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+		t.Errorf("find zypper (sap-demo) = %+v", hits)
+	}
+	if hits := c.FindCommand("zypper", []string{"no-such-doc"}); len(hits) != 0 {
+		t.Errorf("find zypper (no-such-doc) = %+v", hits)
+	}
+	if hits := c.Search("reboot", "for SAP", "", 0, 1, false, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" {
 		t.Errorf("search = %+v", hits)
 	}
-	if hits := c.Search("rebo.", "for SAP", "", 0, 0, true); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+	if hits := c.Search("rebo.", "for SAP", "", 0, 0, true, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" {
 		t.Errorf("regex search = %+v", hits)
+	}
+	if hits := c.Search("zypper", "", "", 0, 0, false, []string{"sles-demo"}); len(hits) != 1 || hits[0].DocID != "sles-demo" {
+		t.Errorf("search (sles-demo) = %+v", hits)
+	}
+	if hits := c.Search("zypper", "", "", 0, 0, false, []string{"no-such-doc"}); len(hits) != 0 {
+		t.Errorf("search (no-such-doc) = %+v", hits)
 	}
 }
 
