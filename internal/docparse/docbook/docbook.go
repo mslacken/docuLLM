@@ -144,35 +144,59 @@ func (l *xmlLoader) buildDocBook(name string) (docparse.Document, []docparse.Glo
 	if vars["MAIN"] == "" {
 		return docparse.Document{}, nil, nil, fmt.Errorf("no MAIN")
 	}
-	asmPath := filepath.Join(l.root, vars["SRC_DIR"], vars["MAIN"])
+	srcDir := firstNonEmpty(vars["SRC_DIR"], "xml")
+	asmPath := filepath.Join(l.root, srcDir, vars["MAIN"])
 	f, err := l.load(asmPath)
 	if err != nil {
 		return docparse.Document{}, nil, nil, err
 	}
 	prof := profile{os: profileValues(vars["PROFOS"]), arch: profileValues(vars["PROFARCH"]), condition: profileValues(vars["PROFCONDITION"])}
 	asm := prof.apply(f.root)
-	if asm == nil || asm.name != "assembly" {
-		return docparse.Document{}, nil, nil, fmt.Errorf("%s is not an assembly", l.rel(asmPath))
+	if asm == nil {
+		return docparse.Document{}, nil, nil, fmt.Errorf("%s is empty", l.rel(asmPath))
 	}
-	st := selectStructure(asm, firstNonEmpty(vars["STRUCTID"], vars["ROOTID"]))
-	if st == nil {
-		return docparse.Document{}, nil, nil, fmt.Errorf("%s has no structure", l.rel(asmPath))
-	}
-	resources := map[string]string{}
-	for _, rs := range asm.children("resources") {
-		for _, r := range rs.children("resource") {
-			if id, href := r.attr["id"], r.attr["href"]; id != "" && href != "" {
-				resources[id] = filepath.Join(filepath.Dir(asmPath), href)
-			}
-		}
+	if asm.name != "assembly" && asm.name != "book" && asm.name != "article" && asm.name != "set" {
+		return docparse.Document{}, nil, nil, fmt.Errorf("%s is not an assembly or book", l.rel(asmPath))
 	}
 	doc := docparse.Document{
 		Chapters: []docparse.Chapter{},
-		Source:   &docparse.DocSource{DC: name, Assembly: l.rel(asmPath), Structure: st.attr["id"]},
+		Source:   &docparse.DocSource{DC: name, Assembly: l.rel(asmPath)},
 		Profile:  &docparse.Profile{OS: prof.os, Arch: prof.arch, Condition: prof.condition},
 	}
-	merge := st.child("merge")
-	addAssemblyMeta(&doc, merge)
+	var (
+		modules  []*dbModule
+		structID string
+		abstract *xnode
+	)
+	rootID := firstNonEmpty(vars["STRUCTID"], vars["ROOTID"])
+	switch asm.name {
+	case "assembly":
+		st := selectStructure(asm, rootID)
+		if st == nil {
+			return docparse.Document{}, nil, nil, fmt.Errorf("%s has no structure", l.rel(asmPath))
+		}
+		structID = st.attr["id"]
+		doc.Source.Structure = structID
+		resources := map[string]string{}
+		for _, rs := range asm.children("resources") {
+			for _, r := range rs.children("resource") {
+				if id, href := r.attr["id"], r.attr["href"]; id != "" && href != "" {
+					resources[id] = filepath.Join(filepath.Dir(asmPath), href)
+				}
+			}
+		}
+		merge := st.child("merge")
+		addAssemblyMeta(&doc, merge)
+		modules = l.modules(st, resources, prof)
+		abstract = merge.child("abstract")
+	default: // set, book, article
+		target := l.selectRoot(asm, rootID)
+		structID = target.attr["id"]
+		doc.Source.Structure = structID
+		addSetMeta(&doc, target)
+		abstract = target.info("abstract")
+		modules = l.chaptersFromNode(target)
+	}
 	if doc.Distro.Name == "" {
 		doc.Distro.Name = l.entityText(f.ents, "productname", prof)
 	}
@@ -185,12 +209,11 @@ func (l *xmlLoader) buildDocBook(name string) (docparse.Document, []docparse.Glo
 		doc.Distro.Name = reTrailingVersion.ReplaceAllString(doc.Bugtracker.Product, "")
 	}
 	addProfileVersions(&doc.Distro, prof)
-	modules := l.modules(st, resources, prof)
 
 	r := newRenderer(vars["IMG_SRC_DIR"])
-	r.collectIDs(st.attr["id"], doc.Title, modules)
+	r.collectIDs(structID, doc.Title, modules)
 	glossary := r.glossary(modules)
-	if summary := r.text(leadParas(merge.child("abstract"))); summary != "" {
+	if summary := r.text(leadParas(abstract)); summary != "" {
 		doc.Summary = summary
 	}
 
@@ -421,6 +444,216 @@ func (l *xmlLoader) modules(parent *xnode, resources map[string]string, prof pro
 		out = append(out, m)
 	}
 	return out
+}
+
+// isStructural reports whether an element is a container that becomes its own
+// chapter (a book, part, chapter or article of a set).
+func isStructural(name string) bool {
+	switch name {
+	case "book", "part", "chapter", "simplechapter", "article":
+		return true
+	}
+	return false
+}
+
+// isLeafStructural reports whether an element is a leaf chapter, the unit the
+// book's top level chapters are split into. Parts and sets are containers.
+func isLeafStructural(name string) bool {
+	switch name {
+	case "chapter", "simplechapter", "article":
+		return true
+	}
+	return false
+}
+
+// isContainerStructural reports whether an element groups chapters (a book,
+// part or set) and may be descended into to reach them.
+func isContainerStructural(name string) bool {
+	switch name {
+	case "book", "part", "set":
+		return true
+	}
+	return false
+}
+
+// selectRoot returns the book, article or chapter selected by id below asm,
+// or asm itself if it has no id or the id is not found.
+func (l *xmlLoader) selectRoot(asm *xnode, id string) *xnode {
+	if id != "" {
+		if byID := findByID(asm, id); byID != nil {
+			return byID
+		}
+		warnf("id %q not found, using %q", id, asm.attr["id"])
+	}
+	return asm
+}
+
+// findByID returns the first element below n whose xml:id is id, or nil.
+func findByID(n *xnode, id string) *xnode {
+	if n.attr["id"] == id {
+		return n
+	}
+	for _, k := range n.kids {
+		if k.name == "" {
+			continue
+		}
+		if m := findByID(k, id); m != nil {
+			return m
+		}
+	}
+	return nil
+}
+
+// chaptersFromNode returns the chapters below target: the leaf structural
+// elements (chapter, simplechapter or article) a set or book contains, and the
+// node itself for an article or chapter.
+func (l *xmlLoader) chaptersFromNode(target *xnode) []*dbModule {
+	if target.name == "set" || target.name == "book" {
+		out := l.collectLeafChapters(target)
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return []*dbModule{l.structModule(target)}
+}
+
+// collectLeafChapters returns the leaf structural elements below target, in
+// document order. Containers (book, part, set) are descended into, following
+// <xi:include> nodes, so a book's parts and the chapters they include all
+// become top level chapters.
+func (l *xmlLoader) collectLeafChapters(n *xnode) []*dbModule {
+	var out []*dbModule
+	for _, k := range n.kids {
+		if k.name == "" {
+			continue
+		}
+		switch {
+		case isLeafStructural(k.name):
+			out = append(out, l.structModule(k))
+		case isContainerStructural(k.name):
+			out = append(out, l.collectLeafChapters(k)...)
+		case k.name == includeNode:
+			inc := structuralRoot(k)
+			if isContainerStructural(inc.name) {
+				out = append(out, l.collectLeafChapters(inc)...)
+			} else if isLeafStructural(inc.name) {
+				out = append(out, l.structModule(inc))
+			}
+		}
+	}
+	return out
+}
+
+// structuralRoot returns the element an include node pulls in, or k itself.
+func structuralRoot(k *xnode) *xnode {
+	if k.name == includeNode && len(k.kids) == 1 && k.kids[0].name != "" {
+		return k.kids[0]
+	}
+	return k
+}
+
+// structModule turns a structural element into a module: its own text content
+// is the chapter body and its structural children become sub modules, so a
+// part and its chapters render like the assembly's modules and sub modules.
+func (l *xmlLoader) structModule(n *xnode) *dbModule {
+	m := &dbModule{
+		id:       n.attr["id"],
+		title:    n.titleNode().flatText(),
+		abstract: n.info("abstract"),
+		renderAs: "section",
+	}
+	var content []*xnode
+	for _, k := range n.kids {
+		if k.name == "" || isStructural(k.name) {
+			continue
+		}
+		content = append(content, k)
+	}
+	if len(content) > 0 {
+		m.topic = &xnode{name: n.name, attr: n.attr, kids: content}
+	}
+	for _, k := range n.kids {
+		if k.name != "" && isStructural(k.name) {
+			m.kids = append(m.kids, l.structModule(k))
+		}
+	}
+	return m
+}
+
+// addSetMeta fills the document metadata from the info of a set, book or
+// article.
+func addSetMeta(doc *docparse.Document, n *xnode) {
+	doc.Meta = &docparse.DocMeta{}
+	doc.Title = n.titleNode().flatText()
+	if s := n.child("subtitle"); s != nil {
+		doc.Subtitle = s.flatText()
+	}
+	info := n.child("info")
+	if info == nil {
+		info = n
+	}
+	for _, m := range info.children("meta") {
+		text := firstNonEmpty(m.attr["content"], m.flatText())
+		switch m.attr["name"] {
+		case "maintainer":
+			doc.Meta.Maintainer = text
+		case "series":
+			doc.Meta.Series = text
+		case "task":
+			doc.Meta.Tasks = phrases(m)
+		case "category":
+			doc.Meta.Categories = phrases(m)
+		case "architecture":
+			doc.Meta.Architectures = phrases(m)
+		case "updated":
+			doc.Meta.Updated = text
+		case "title":
+			doc.Meta.Title = text
+		case "description":
+			doc.Meta.Description = text
+		case "social-descr":
+			doc.Meta.SocialDescription = text
+		case "productname":
+			for _, p := range m.find("productname") {
+				if doc.Distro.Name == "" {
+					doc.Distro.Name = reTrailingVersion.ReplaceAllString(p.flatText(), "")
+				}
+			}
+		}
+	}
+	if pn := info.child("productname"); pn != nil && doc.Distro.Name == "" {
+		name := pn.flatText()
+		doc.Distro.Name = reTrailingVersion.ReplaceAllString(name, "")
+		if v := strings.TrimSpace(reTrailingVersion.FindString(name)); v != "" && !slices.Contains(doc.Distro.Versions, v) {
+			doc.Distro.Versions = append(doc.Distro.Versions, v)
+		}
+	}
+	if dn := info.child("productnumber"); dn != nil {
+		if v := dn.flatText(); v != "" && !slices.Contains(doc.Distro.Versions, v) {
+			doc.Distro.Versions = append(doc.Distro.Versions, v)
+		}
+	}
+	if doc.Title == "" {
+		doc.Title = doc.Meta.Title
+	}
+	for _, rev := range info.find("revision") {
+		doc.Revisions = append(doc.Revisions, docparse.Revision{
+			Date:        rev.child("date").flatText(),
+			Description: firstNonEmpty(rev.child("revdescription").flatText(), rev.child("revremark").flatText()),
+		})
+	}
+	if dm := info.find("docmanager"); len(dm) > 0 {
+		if bt := dm[0].child("bugtracker"); bt != nil {
+			doc.Bugtracker = &docparse.Bugtracker{
+				URL: bt.child("url").flatText(), Component: bt.child("component").flatText(),
+				Product: bt.child("product").flatText(), Assignee: bt.child("assignee").flatText(),
+			}
+		}
+		doc.Translation = dm[0].child("translation").flatText()
+	}
+	if reflect.DeepEqual(*doc.Meta, docparse.DocMeta{}) {
+		doc.Meta = nil
+	}
 }
 
 // attrOr returns the attribute name of n, or "" for a nil node.
