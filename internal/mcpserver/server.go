@@ -72,6 +72,7 @@ type searchDocsIn struct {
 	Query   string   `json:"query" jsonschema:"search words"`
 	Product string   `json:"product,omitempty" jsonschema:"only documents whose product contains this text"`
 	Version string   `json:"version,omitempty" jsonschema:"only documents for this product version"`
+	Scope   string   `json:"scope,omitempty" jsonschema:"where to search within a chapter: 'all' (title, summary and body, default), 'title' or 'summary'"`
 	Limit   int      `json:"limit,omitempty" jsonschema:"maximum number of hits, default 10"`
 	Fuzzy   int      `json:"fuzzy,omitempty" jsonschema:"maximum edit distance for a word to still match, default 1 (0 disables fuzzy)"`
 	Regex   bool     `json:"regex,omitempty" jsonschema:"treat query as a regular expression instead of words"`
@@ -152,13 +153,15 @@ func ListDocuments(c *docparse.Corpus, product, version string) ListDocumentsOut
 }
 
 // SearchDocs ranks chapters for query, optionally filtered by product/version
-// and restricted to the documents in docs. fuzzy is the maximum edit distance
-// allowed for a word match; regex treats the query as a regular expression.
-func SearchDocs(c *docparse.Corpus, query, product, version string, limit, fuzzy int, regex bool, docs []string) SearchDocsOut {
+// and restricted to the documents in docs. scope limits the search to a
+// chapter's "title" or "summary" ("all" or empty searches everything); fuzzy
+// is the maximum edit distance allowed for a word match; regex treats the
+// query as a regular expression.
+func SearchDocs(c *docparse.Corpus, query, product, version, scope string, limit, fuzzy int, regex bool, docs []string) SearchDocsOut {
 	if limit <= 0 {
 		limit = 10
 	}
-	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, limit, fuzzy, regex, docs))}
+	return SearchDocsOut{Hits: nonNil(c.Search(query, product, version, scope, limit, fuzzy, regex, docs))}
 }
 
 // FindCommand returns the documented commands containing every word of pattern,
@@ -246,13 +249,15 @@ func CreateListDocumentsSchema(c *docparse.Corpus) *jsonschema.Schema {
 }
 
 // CreateSearchDocsSchema returns the input schema for search_docs with product
-// and version restricted to the values present in the corpus.
+// and version restricted to the values present in the corpus and scope to the
+// supported values.
 func CreateSearchDocsSchema(c *docparse.Corpus) *jsonschema.Schema {
 	schema, _ := jsonschema.For[searchDocsIn](nil)
 	if schema != nil {
 		ov := CorpusSummary(c)
 		setEnum(schema, "product", ov.Products)
 		setEnum(schema, "version", ov.Versions)
+		setEnum(schema, "scope", []string{"all", "title", "summary"})
 	}
 	return schema
 }
@@ -305,8 +310,8 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 		Description: "Full text search over all chapters. Returns ranked hits with doc_id and chapter_id for read_document.",
 		InputSchema: CreateSearchDocsSchema(c),
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchDocsIn) (*mcp.CallToolResult, SearchDocsOut, error) {
-		debugf("search_docs query=%q product=%q version=%q limit=%d fuzzy=%d regex=%v docs=%q", in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex, in.Docs)
-		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Limit, in.Fuzzy, in.Regex, in.Docs)
+		debugf("search_docs query=%q product=%q version=%q scope=%q limit=%d fuzzy=%d regex=%v docs=%q", in.Query, in.Product, in.Version, in.Scope, in.Limit, in.Fuzzy, in.Regex, in.Docs)
+		out := SearchDocs(c, in.Query, in.Product, in.Version, in.Scope, in.Limit, in.Fuzzy, in.Regex, in.Docs)
 		debugf("search_docs result: %d hits", len(out.Hits))
 		return nil, out, nil
 	})

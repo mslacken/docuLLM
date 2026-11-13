@@ -268,6 +268,10 @@ type SearchHit struct {
 // keeping at most limit hits (0 = no limit). If docIDs is non-empty, only the
 // documents with those ids are searched; otherwise the whole corpus is searched.
 //
+// scope restricts the search to part of a chapter: "all" (the default)
+// searches title, summary and full text, "title" only the chapter title and
+// "summary" only the chapter summary.
+//
 // By default the query is split into words and each word is scored against
 // every chapter. A word matches corpus words within fuzzy edits of it (fuzzy
 // 0 = exact only, 1 = a single typo, 2 = two). Chapters are ranked by the
@@ -276,16 +280,19 @@ type SearchHit struct {
 // those matching only some.
 //
 // If regex is set, the query is instead a regular expression (RE2 syntax)
-// matched against each chapter's title, summary and text, and the matching
-// chapters are returned in document order.
-func (c *Corpus) Search(query, product, version string, limit, fuzzy int, regex bool, docIDs []string) []SearchHit {
+// matched against each chapter's title, summary and text (as restricted by
+// scope), and the matching chapters are returned in document order.
+func (c *Corpus) Search(query, product, version, scope string, limit, fuzzy int, regex bool, docIDs []string) []SearchHit {
 	if fuzzy < 0 {
 		fuzzy = 0
 	}
-	if regex {
-		return c.searchRegex(query, product, version, limit, docIDs)
+	if scope == "" {
+		scope = "all"
 	}
-	return c.searchWords(query, product, version, limit, fuzzy, docIDs)
+	if regex {
+		return c.searchRegex(query, product, version, scope, limit, docIDs)
+	}
+	return c.searchWords(query, product, version, scope, limit, fuzzy, docIDs)
 }
 
 // docIn reports whether doc is part of the search, i.e. its id is in docIDs if
@@ -295,8 +302,10 @@ func docIn(docIDs []string, id string) bool {
 }
 
 // searchWords scores each chapter that passes the product/version filter by
-// how well the words of query match it, and returns them best first.
-func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int, docIDs []string) []SearchHit {
+// how well the words of query match it, and returns them best first. With
+// scope "title" or "summary" only the chapter title or summary is searched,
+// and the hit snippet is taken from that field instead of the body.
+func (c *Corpus) searchWords(query, product, version, scope string, limit, fuzzy int, docIDs []string) []SearchHit {
 	q := words(query)
 	if len(q) == 0 {
 		return nil
@@ -310,9 +319,16 @@ func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int, d
 		for i := range doc.Chapters {
 			ch := &doc.Chapters[i]
 			raw := c.Text(ch)
-			score, matched := c.chapterScore(raw, words(ch.Title), words(ch.Summary), q, fuzzy)
+			body, title, summary := words(raw), words(ch.Title), words(ch.Summary)
+			switch scope {
+			case "title":
+				body, summary = nil, nil
+			case "summary":
+				body, title = nil, nil
+			}
+			score, matched := c.chapterScore(body, title, summary, q, fuzzy)
 			if matched > 0 {
-				hits = append(hits, newSearchHit(doc, ch, raw, q, score))
+				hits = append(hits, newSearchHit(doc, ch, raw, scope, q, score))
 			}
 		}
 	}
@@ -327,8 +343,7 @@ func (c *Corpus) searchWords(query, product, version string, limit, fuzzy int, d
 // the number of those words it matched. The total is scaled by the fraction of
 // query words matched, so a chapter containing all of them ranks above one
 // containing only some.
-func (c *Corpus) chapterScore(raw string, title, summary []string, q []string, fuzzy int) (score float64, matched int) {
-	text := words(raw)
+func (c *Corpus) chapterScore(text, title, summary []string, q []string, fuzzy int) (score float64, matched int) {
 	for _, w := range q {
 		s := c.wordScore(text, title, summary, w, fuzzy)
 		if s > 0 {
@@ -351,18 +366,32 @@ func (c *Corpus) wordScore(text, title, summary []string, w string, fuzzy int) f
 	return (tf + 3*float64(count(title, w)) + float64(count(summary, w))) * idf
 }
 
-// newSearchHit assembles the hit for chapter ch of document doc.
-func newSearchHit(doc *Document, ch *Chapter, raw string, q []string, score float64) SearchHit {
+// newSearchHit assembles the hit for chapter ch of document doc. With scope
+// "title" or "summary" the snippet is taken from that field of the chapter
+// instead of the body, since that is all the search looked at.
+func newSearchHit(doc *Document, ch *Chapter, raw, scope string, q []string, score float64) SearchHit {
 	return SearchHit{
 		DocID: doc.ID, ChapterID: ch.ID, Document: doc.Title, Title: ch.Title,
-		Summary: ch.Summary, Snippet: snippet(raw, q), Score: math.Round(score*100) / 100,
+		Summary: ch.Summary, Snippet: scopeSnippet(raw, ch, scope, q), Score: math.Round(score*100) / 100,
 	}
 }
 
+// scopeSnippet returns the snippet for a hit: the matching line of the body,
+// or the chapter's title or summary when the search was scoped to them.
+func scopeSnippet(raw string, ch *Chapter, scope string, q []string) string {
+	switch scope {
+	case "title":
+		return ch.Title
+	case "summary":
+		return ch.Summary
+	}
+	return snippet(raw, q)
+}
+
 // searchRegex matches the regular expression query against each chapter's
-// title, summary and text and returns the hits in document order. An invalid
-// pattern yields no hits.
-func (c *Corpus) searchRegex(query, product, version string, limit int, docIDs []string) []SearchHit {
+// title, summary and text (as restricted by scope) and returns the hits in
+// document order. An invalid pattern yields no hits.
+func (c *Corpus) searchRegex(query, product, version, scope string, limit int, docIDs []string) []SearchHit {
 	re, err := regexp.Compile(query)
 	if err != nil {
 		return nil
@@ -376,8 +405,10 @@ func (c *Corpus) searchRegex(query, product, version string, limit int, docIDs [
 		for i := range doc.Chapters {
 			ch := &doc.Chapters[i]
 			raw := c.Text(ch)
-			if re.MatchString(ch.Title) || re.MatchString(ch.Summary) || re.MatchString(raw) {
-				hits = append(hits, newSearchHit(doc, ch, raw, words(query), 0))
+			if (scope != "summary" && re.MatchString(ch.Title)) ||
+				(scope != "title" && re.MatchString(ch.Summary)) ||
+				(scope == "all" && re.MatchString(raw)) {
+				hits = append(hits, newSearchHit(doc, ch, raw, scope, words(query), 0))
 			}
 			if limit > 0 && len(hits) >= limit {
 				return hits

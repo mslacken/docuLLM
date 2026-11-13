@@ -404,17 +404,37 @@ func TestDocBookCorpus(t *testing.T) {
 	if hits := c.FindCommand("zypper", []string{"no-such-doc"}); len(hits) != 0 {
 		t.Errorf("find zypper (no-such-doc) = %+v", hits)
 	}
-	if hits := c.Search("reboot", "for SAP", "", 0, 1, false, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+	if hits := c.Search("reboot", "for SAP", "", "", 0, 1, false, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" {
 		t.Errorf("search = %+v", hits)
 	}
-	if hits := c.Search("rebo.", "for SAP", "", 0, 0, true, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" {
+	if hits := c.Search("rebo.", "for SAP", "", "", 0, 0, true, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" {
 		t.Errorf("regex search = %+v", hits)
 	}
-	if hits := c.Search("zypper", "", "", 0, 0, false, []string{"sles-demo"}); len(hits) != 1 || hits[0].DocID != "sles-demo" {
+	if hits := c.Search("zypper", "", "", "", 0, 0, false, []string{"sles-demo"}); len(hits) != 1 || hits[0].DocID != "sles-demo" {
 		t.Errorf("search (sles-demo) = %+v", hits)
 	}
-	if hits := c.Search("zypper", "", "", 0, 0, false, []string{"no-such-doc"}); len(hits) != 0 {
+	if hits := c.Search("zypper", "", "", "", 0, 0, false, []string{"no-such-doc"}); len(hits) != 0 {
 		t.Errorf("search (no-such-doc) = %+v", hits)
+	}
+	// scope: "reboot" and "zypper" are body-only, "install" is title-only,
+	// "container" appears only in a summary
+	if hits := c.Search("reboot", "for SAP", "", "title", 0, 1, false, nil); len(hits) != 0 {
+		t.Errorf("title search for body word = %+v", hits)
+	}
+	if hits := c.Search("zypper", "for SAP", "", "summary", 0, 1, false, nil); len(hits) != 0 {
+		t.Errorf("summary search for body word = %+v", hits)
+	}
+	if hits := c.Search("rebo.", "for SAP", "", "body", 0, 0, true, nil); len(hits) != 0 {
+		t.Errorf("regex search with an unknown scope = %+v", hits)
+	}
+	if hits := c.Search("install", "for SAP", "", "title", 0, 0, false, nil); len(hits) != 1 || hits[0].DocID != "sap-demo" || hits[0].Snippet != "Install it" {
+		t.Errorf("title search = %+v", hits)
+	}
+	if hits := c.Search("reboot", "for SAP", "", "title", 0, 0, true, nil); len(hits) != 0 {
+		t.Errorf("regex title search for body pattern = %+v", hits)
+	}
+	if hits := c.Search("container", "for SAP", "", "summary", 0, 0, false, nil); len(hits) != 1 || hits[0].Snippet != "Container abstract." {
+		t.Errorf("summary search = %+v", hits)
 	}
 }
 

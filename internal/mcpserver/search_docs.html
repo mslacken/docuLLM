@@ -1,8 +1,15 @@
 {{define "search_docs"}}
   <h2>Search documents</h2>
-  <p class="desc">Full-text ranked search over every chapter. Results link straight to the chapter.</p>
+  <p class="desc">Ranked search over chapter titles, summaries and body text &mdash; or limited to just the titles or just the summaries. Results link straight to the chapter.</p>
   <form method="get" action="/search" class="grid">
     <div class="span2"><label>Query <span class="req">*</span></label><input name="query" value="{{esc .Args.query}}"></div>
+    <div><label>Scope <span class="hint">where to search</span></label>
+      <select name="scope">
+        <option value=""{{if eq .Args.scope ""}} selected{{end}}>Everything (title, summary &amp; body)</option>
+        <option value="title"{{if eq .Args.scope "title"}} selected{{end}}>Titles only</option>
+        <option value="summary"{{if eq .Args.scope "summary"}} selected{{end}}>Summaries only</option>
+      </select>
+    </div>
     <div><label>Product <span class="hint">one present in the corpus</span></label>
       <select name="product">
         <option value=""{{if eq .Args.product ""}} selected{{end}}>All</option>
