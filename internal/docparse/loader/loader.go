@@ -118,25 +118,41 @@ func Load(files []DocFile) (*docparse.Corpus, error) {
 			xml[dir] = docbook.NewLoader(dir)
 		}
 	}
+	results := doRead(files, xml)
 
+	c := newCorpus(files, results)
+	if len(c.Documents) == 0 {
+		return nil, fmt.Errorf("no usable documents found")
+	}
+	c.Finish()
+	return c, nil
+}
+
+// doRead reads all the files in parallel and returns one result each, in file
+// order.
+func doRead(files []DocFile, xml map[string]*docbook.Loader) []result {
 	results := make([]result, len(files))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for range runtime.GOMAXPROCS(0) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range jobs {
 				results[i] = read(files[i], xml)
 			}
-		}()
+		})
 	}
 	for i := range files {
 		jobs <- i
 	}
 	close(jobs)
 	wg.Wait()
+	return results
+}
 
+// newCorpus fills a new corpus with the results in file order, so that the
+// document order and the first definition winning for a glossary term stay
+// deterministic.
+func newCorpus(files []DocFile, results []result) *docparse.Corpus {
 	var segs []markdown.Segment
 	for i, r := range results {
 		if r.err != nil {
@@ -158,11 +174,7 @@ func Load(files []DocFile) (*docparse.Corpus, error) {
 		}
 		c.Add(r.part)
 	}
-	if len(c.Documents) == 0 {
-		return nil, fmt.Errorf("no usable documents found")
-	}
-	c.Finish()
-	return c, nil
+	return c
 }
 
 // read reads the file f with the parser for its type.

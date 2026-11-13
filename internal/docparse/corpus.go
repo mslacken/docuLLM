@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/hbollon/go-edlib"
@@ -93,21 +94,41 @@ func (c *Corpus) Finish() {
 		c.Glossary[i].match = glossaryMatchers(c.Glossary[i].Term)
 		c.Glossary[i].needles = glossaryNeedles(c.Glossary[i].Term)
 	}
+	// The glossary matching is the slow part: every chapter's prose is scanned
+	// against the glossary, which is CPU bound and independent per chapter, so
+	// run it in parallel. DocBook documents share topics, so the same prose is
+	// only matched once, cached by a mutex.
+	var chapters []*Chapter
+	for d := range c.Documents {
+		for i := range c.Documents[d].Chapters {
+			chapters = append(chapters, &c.Documents[d].Chapters[i])
+		}
+	}
+	cache := map[string][]string{}
+	var cacheMu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ch := range chapters {
+		wg.Go(func() {
+			cacheMu.Lock()
+			t, ok := cache[ch.Prose]
+			cacheMu.Unlock()
+			if !ok {
+				t = c.termsIn(ch.Prose)
+				cacheMu.Lock()
+				cache[ch.Prose] = t
+				cacheMu.Unlock()
+			}
+			ch.Terms = t
+		})
+	}
+	wg.Wait()
+	c.total = len(chapters)
+
 	c.df = map[string]int{}
-	c.total = 0
 	c.commands = nil
-	// DocBook documents share topics, so the same prose shows up many times
-	terms := map[string][]string{}
 	for d := range c.Documents {
 		for i := range c.Documents[d].Chapters {
 			ch := &c.Documents[d].Chapters[i]
-			t, ok := terms[ch.Prose]
-			if !ok {
-				t = c.termsIn(ch.Prose)
-				terms[ch.Prose] = t
-			}
-			ch.Terms = t
-			c.total++
 			for _, cmd := range ch.Commands {
 				c.commands = append(c.commands, CommandHit{Command: cmd, DocID: c.Documents[d].ID, ChapterID: ch.ID, Title: ch.Title})
 			}
