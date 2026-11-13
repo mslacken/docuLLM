@@ -80,6 +80,9 @@ var (
 
 	// callout markers left behind by the html converter: "params foo=bar \1"
 	reCallout = regexp.MustCompile(`\\\d+$`)
+	// callout markers of the DocBook renderer, anywhere in the line:
+	// "Type=forking <1>", "eval <2> \", "vol-create-as POOL <1>NAME"
+	reCalloutMark = regexp.MustCompile(`<\d+>`)
 
 	crmNavigation = map[string]bool{"cd": true, "up": true, "end": true, "back": true, "quit": true, "exit": true, "bye": true, "ls": true, "help": true}
 )
@@ -129,13 +132,13 @@ func commandsInBlock(text string) []string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	for i := 0; i < len(lines); i++ {
-		cmd, ok := promptCommand(reCallout.ReplaceAllString(strings.TrimRight(lines[i], " \t"), `\`))
+		cmd, ok := promptCommand(uncallout(lines[i]))
 		if !ok {
 			continue
 		}
 		for strings.HasSuffix(cmd, "\\") && i+1 < len(lines) {
 			i++
-			next := reCallout.ReplaceAllString(strings.TrimSpace(lines[i]), `\`)
+			next := strings.TrimSpace(uncallout(lines[i]))
 			if c, ok := promptCommand(next); ok && strings.HasPrefix(next, ">") {
 				next = c
 			}
@@ -147,6 +150,12 @@ func commandsInBlock(text string) []string {
 		}
 	}
 	return out
+}
+
+// uncallout removes the callout markers from a line of code.
+func uncallout(ln string) string {
+	ln = strings.TrimRight(reCalloutMark.ReplaceAllString(ln, " "), " \t")
+	return reCallout.ReplaceAllString(ln, `\`)
 }
 
 func promptCommand(ln string) (string, bool) {

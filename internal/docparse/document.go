@@ -53,6 +53,7 @@ type Chapter struct {
 	Terms      []string `json:"terms,omitempty" yaml:"terms,omitempty"` // glossary terms mentioned in the prose
 
 	// DocBook assemblies only; not exposed via MCP
+	Number        string       `json:"number,omitempty" yaml:"number,omitempty"`         // as in the published document: "19" (chapter), "A" (appendix), "3" (section of an article)
 	TopicType     string       `json:"topic_type,omitempty" yaml:"topic_type,omitempty"` // task, concept, reference, glue or container
 	RenderAs      string       `json:"render_as,omitempty" yaml:"render_as,omitempty"`   // section, appendix, ...
 	Maintainer    string       `json:"maintainer,omitempty" yaml:"maintainer,omitempty"`
@@ -122,19 +123,23 @@ type Bugtracker struct {
 
 // Section is a heading below the chapter heading. Level 1 is a direct
 // subsection of the chapter. File is set for sections taken from another
-// topic file (nested modules).
+// topic file (nested modules). Number is the section number as published,
+// e.g. "19.6.9", empty for unnumbered sections.
 type Section struct {
-	ID    string `json:"id,omitempty" yaml:"id,omitempty"`
-	Title string `json:"title" yaml:"title"`
-	Level int    `json:"level" yaml:"level"`
-	File  string `json:"file,omitempty" yaml:"file,omitempty"`
+	ID     string `json:"id,omitempty" yaml:"id,omitempty"`
+	Number string `json:"number,omitempty" yaml:"number,omitempty"`
+	Title  string `json:"title" yaml:"title"`
+	Level  int    `json:"level" yaml:"level"`
+	File   string `json:"file,omitempty" yaml:"file,omitempty"`
 }
 
-// Procedure is a numbered list of steps.
+// Procedure is a numbered list of steps. Number is the label of a titled
+// procedure, e.g. "19.1" for "Procedure 19.1".
 type Procedure struct {
-	ID    string `json:"id,omitempty" yaml:"id,omitempty"`
-	Title string `json:"title,omitempty" yaml:"title,omitempty"`
-	Steps int    `json:"steps" yaml:"steps"`
+	ID     string `json:"id,omitempty" yaml:"id,omitempty"`
+	Number string `json:"number,omitempty" yaml:"number,omitempty"`
+	Title  string `json:"title,omitempty" yaml:"title,omitempty"`
+	Steps  int    `json:"steps" yaml:"steps"`
 }
 
 // Admonition is a note, tip, important, warning or caution box.

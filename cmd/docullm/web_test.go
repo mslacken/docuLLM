@@ -65,28 +65,31 @@ func TestWebPagesRender(t *testing.T) {
 	h := serveWeb(buildCorpus())
 
 	cases := []struct {
-		name string
-		url  string
-		want []string
+		name    string
+		url     string
+		want    []string
+		notWant []string
 	}{
-		{"index", "/", []string{"/documents", "/search", "/command", "/term"}},
-		{"documents", "/documents", []string{"Guide", "Sample Product", "Read &rarr;", `<option value="" selected>All</option>`}},
-		{"documents-filter", "/documents?product=Nope", []string{"validating", `<option value="">All</option>`}},
-		{"documents-version", "/documents?version=1.0", []string{`<option value="">All</option>`, `<option value="1.0" selected>`}},
-		{"read-toc", "/document/guide", []string{"Guide", "Table of contents", "Setup", "Quorum", "/chapter/guide/setup"}},
-		{"read-chapter", "/chapter/guide/setup", []string{"crm configure show", "CIB", "Commands in this chapter"}},
-		{"read-unknown", "/document/nope", []string{"unknown document", "Browse the documents"}},
-		{"search", "/search?query=quorum&limit=10", []string{"quorum", "open &rarr;"}},
-		{"search-docs", "/search?query=cib&docs=guide", []string{"Setup", `name="docs" value="guide" checked`}},
-		{"search-docs-empty", "/search?query=cib&docs=zzz", []string{"No results"}},
-		{"search-regex", "/search?query=bra&regex=on", []string{"Quorum", "open &rarr;", `name="regex" value="on" checked`}},
-		{"search-empty", "/search", []string{"Search documents"}},
-		{"command", "/command?pattern=crm+configure", []string{"crm configure show"}},
-		{"command-docs", "/command?pattern=crm+configure&docs=guide", []string{"crm configure show", `name="docs" value="guide" checked`}},
-		{"command-docs-empty", "/command?pattern=crm+configure&docs=zzz", []string{"No matching commands"}},
-		{"command-empty", "/command?pattern=zzz", []string{"No matching commands"}},
-		{"term", "/term?term=CIB", []string{"cluster information base", "The cluster configuration."}},
-		{"term-empty", "/term?term=zzz", []string{"No glossary entry"}},
+		{name: "index", url: "/", want: []string{"/documents", "/search", "/command", "/term"}},
+		{name: "documents", url: "/documents", want: []string{"Guide", "Sample Product", "Read &rarr;", `<option value="" selected>All</option>`}},
+		{name: "documents-filter", url: "/documents?product=Nope", want: []string{"validating", `<option value="">All</option>`}},
+		{name: "documents-version", url: "/documents?version=1.0", want: []string{`<option value="">All</option>`, `<option value="1.0" selected>`}},
+		{name: "read-toc", url: "/document/guide", want: []string{"Guide", "Table of contents", "Setup", "Quorum", "/chapter/guide/setup"}},
+		{name: "read-chapter", url: "/chapter/guide/setup",
+			want:    []string{"crm configure show", "CIB", "Commands in this chapter"},
+			notWant: []string{"Table of contents", "/chapter/guide/quorum"}},
+		{name: "read-unknown", url: "/document/nope", want: []string{"unknown document", "Browse the documents"}},
+		{name: "search", url: "/search?query=quorum&limit=10", want: []string{"quorum", "open &rarr;"}},
+		{name: "search-docs", url: "/search?query=cib&docs=guide", want: []string{"Setup", `name="docs" value="guide" checked`}},
+		{name: "search-docs-empty", url: "/search?query=cib&docs=zzz", want: []string{"No results"}},
+		{name: "search-regex", url: "/search?query=bra&regex=on", want: []string{"Quorum", "open &rarr;", `name="regex" value="on" checked`}},
+		{name: "search-empty", url: "/search", want: []string{"Search documents"}},
+		{name: "command", url: "/command?pattern=crm+configure", want: []string{"crm configure show"}},
+		{name: "command-docs", url: "/command?pattern=crm+configure&docs=guide", want: []string{"crm configure show", `name="docs" value="guide" checked`}},
+		{name: "command-docs-empty", url: "/command?pattern=crm+configure&docs=zzz", want: []string{"No matching commands"}},
+		{name: "command-empty", url: "/command?pattern=zzz", want: []string{"No matching commands"}},
+		{name: "term", url: "/term?term=CIB", want: []string{"cluster information base", "The cluster configuration."}},
+		{name: "term-empty", url: "/term?term=zzz", want: []string{"No glossary entry"}},
 	}
 
 	for _, tc := range cases {
@@ -100,6 +103,11 @@ func TestWebPagesRender(t *testing.T) {
 		for _, w := range tc.want {
 			if !strings.Contains(out, w) {
 				t.Errorf("%s: output missing %q\n---\n%s", tc.name, w, out)
+			}
+		}
+		for _, w := range tc.notWant {
+			if strings.Contains(out, w) {
+				t.Errorf("%s: output unexpectedly contains %q\n---\n%s", tc.name, w, out)
 			}
 		}
 		if strings.Contains(out, "no value") {

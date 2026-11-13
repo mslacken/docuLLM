@@ -64,7 +64,7 @@ type chapterOut struct {
 
 type ReadDocumentOut struct {
 	documentInfo
-	TOC     []tocEntry  `json:"toc"`
+	TOC     []tocEntry  `json:"toc,omitempty"`
 	Chapter *chapterOut `json:"chapter,omitempty"`
 }
 
@@ -109,11 +109,12 @@ func BuildReadDocument(c *docparse.Corpus, docID, chapterID string) (ReadDocumen
 	if doc == nil {
 		return ReadDocumentOut{}, fmt.Errorf("unknown document %q, use list_documents to get the ids", docID)
 	}
-	out := ReadDocumentOut{documentInfo: info(doc), TOC: []tocEntry{}}
-	for _, ch := range doc.Chapters {
-		out.TOC = append(out.TOC, tocEntry{ID: ch.ID, Title: ch.Title, Summary: ch.Summary, Commands: len(ch.Commands)})
-	}
+	out := ReadDocumentOut{documentInfo: info(doc)}
 	if chapterID == "" {
+		out.TOC = make([]tocEntry, 0, len(doc.Chapters))
+		for _, ch := range doc.Chapters {
+			out.TOC = append(out.TOC, tocEntry{ID: ch.ID, Title: ch.Title, Summary: ch.Summary, Commands: len(ch.Commands)})
+		}
 		return out, nil
 	}
 	ch := doc.Chapter(chapterID)
@@ -289,8 +290,9 @@ func NewServer(c *docparse.Corpus) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "read_document",
-		Description: "Return a document's metadata and table of contents. If chapter_id is given, also return " +
-			"that chapter's markdown, the commands it shows and the definitions of all glossary terms it mentions.",
+		Description: "Return a document's metadata and table of contents. If chapter_id is given, return " +
+			"that chapter's markdown, the commands it shows and the definitions of all glossary terms it mentions, " +
+			"without the table of contents.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in readDocumentIn) (*mcp.CallToolResult, ReadDocumentOut, error) {
 		debugf("read_document doc_id=%q chapter_id=%q", in.DocID, in.ChapterID)
 		out, err := BuildReadDocument(c, in.DocID, in.ChapterID)

@@ -15,17 +15,19 @@ import (
 // structured information (sections, procedures, links, ...) of the chapter
 // being rendered.
 type renderer struct {
-	imgDir string            // IMG_SRC_DIR, images are referenced relative to it
-	ids    map[string]string // xml:id -> title of every element of the document, for xrefs
-	ch     *docparse.Chapter // chapter being rendered, nil while rendering other text
-	alt    string            // fallback alt text for images in a figure
+	imgDir   string            // IMG_SRC_DIR, images are referenced relative to it
+	ids      map[string]string // xml:id -> title of every element of the document, for xrefs
+	callouts map[string]int    // xml:id of a <co> -> its number within its screen
+	num      numbering
+	ch       *docparse.Chapter // chapter being rendered, nil while rendering other text
+	alt      string            // fallback alt text for images in a figure
 }
 
 func newRenderer(imgDir string) *renderer {
 	if imgDir == "" {
 		imgDir = "images"
 	}
-	return &renderer{imgDir: imgDir, ids: map[string]string{}}
+	return &renderer{imgDir: imgDir, ids: map[string]string{}, callouts: map[string]int{}, num: newNumbering()}
 }
 
 // collectIDs records the ids and titles of the structure and all modules, so
@@ -114,9 +116,12 @@ func maintainer(topic *xnode) string {
 // module renders a module and its nested modules; level is the markdown
 // heading level, depth the section depth within the chapter.
 func (r *renderer) module(m *dbModule, level, depth int) []string {
-	bs := [][]string{{mdHeading(level, m.title, m.id)}}
-	if depth > 0 {
-		r.ch.Sections = append(r.ch.Sections, docparse.Section{ID: m.id, Title: m.title, Level: depth, File: m.file})
+	num := r.number(m, depth)
+	bs := [][]string{{mdHeading(level, num, m.title, m.id)}}
+	if depth == 0 {
+		r.ch.Number = num
+	} else {
+		r.ch.Sections = append(r.ch.Sections, docparse.Section{ID: m.id, Number: num, Title: m.title, Level: depth, File: m.file})
 		for _, u := range m.legacy {
 			if !slices.Contains(r.ch.LegacySources, u) {
 				r.ch.LegacySources = append(r.ch.LegacySources, u)
@@ -135,8 +140,11 @@ func (r *renderer) module(m *dbModule, level, depth int) []string {
 	return joinBlocks(bs)
 }
 
-func mdHeading(level int, title, id string) string {
+func mdHeading(level int, num, title, id string) string {
 	h := strings.Repeat("#", min(level, 6)) + " " + title
+	if num != "" {
+		h = strings.Repeat("#", min(level, 6)) + " " + num + " " + title
+	}
 	if id != "" {
 		h += " {#" + id + "}"
 	}
@@ -264,16 +272,23 @@ func (r *renderer) block(n *xnode, level, depth int) [][]string {
 		bs := r.blocks(r.without(n.kids, "title", "info"), level, depth)
 		return prefixFirst(bs, "**"+r.title(n)+".**")
 	case "section", "sect1", "sect2", "sect3", "sect4", "sect5", "simplesect", "topic":
-		title := r.title(n)
-		r.ch.Sections = append(r.ch.Sections, docparse.Section{ID: n.attr["id"], Title: title, Level: depth})
-		bs := [][]string{{mdHeading(level, title, n.attr["id"])}}
+		title, num := r.title(n), ""
+		if n.name != "simplesect" && n.name != "topic" {
+			num = r.section(depth)
+		}
+		r.ch.Sections = append(r.ch.Sections, docparse.Section{ID: n.attr["id"], Number: num, Title: title, Level: depth})
+		bs := [][]string{{mdHeading(level, num, title, n.attr["id"])}}
 		return append(bs, r.blocks(r.without(n.kids, "info", "title", "subtitle", "titleabbrev", "abstract"), level+1, depth+1)...)
 	case "bridgehead":
 		return [][]string{{"**" + n.flatText() + "**"}}
 	case "procedure":
 		steps := r.elems(n.kids, "step")
-		r.ch.Procedures = append(r.ch.Procedures, docparse.Procedure{ID: n.attr["id"], Title: r.title(n), Steps: len(steps)})
-		bs := r.titled(n, "")
+		title, num := r.title(n), ""
+		if title != "" {
+			num = r.formal("procedure")
+		}
+		r.ch.Procedures = append(r.ch.Procedures, docparse.Procedure{ID: n.attr["id"], Number: num, Title: title, Steps: len(steps)})
+		bs := r.titled(n, caption("Procedure", num, ""))
 		bs = append(bs, r.blocks(r.without(n.kids, "title", "info", "step"), level, depth)...)
 		return append(bs, r.list(steps, true, level, depth))
 	case "substeps":
@@ -285,7 +300,7 @@ func (r *renderer) block(n *xnode, level, depth int) [][]string {
 		bs = append(bs, r.blocks(r.without(n.kids, "title", "info", "listitem"), level, depth)...)
 		return append(bs, r.list(r.elems(n.kids, "listitem"), n.name == "orderedlist", level, depth))
 	case "calloutlist":
-		return append(r.titled(n, ""), r.list(r.elems(n.kids, "callout"), true, level, depth))
+		return append(r.titled(n, ""), r.calloutList(n, level, depth))
 	case "variablelist", "glossary", "glossdiv", "glosslist":
 		return append(r.titled(n, ""), r.defList(n, level, depth))
 	case "glossentry":
@@ -293,7 +308,7 @@ func (r *renderer) block(n *xnode, level, depth int) [][]string {
 	case "simplelist":
 		return r.simpleList(n)
 	case "screen", "programlisting", "literallayout", "synopsis":
-		return [][]string{codeBlock(n)}
+		return [][]string{r.codeBlock(n)}
 	case "note", "tip", "important", "warning", "caution":
 		title := r.title(n)
 		r.ch.Admonitions = append(r.ch.Admonitions, docparse.Admonition{Type: n.name, Title: title})
@@ -306,16 +321,16 @@ func (r *renderer) block(n *xnode, level, depth int) [][]string {
 	case "blockquote":
 		return [][]string{quote(joinBlocks(r.blocks(n.kids, level, depth)))}
 	case "table", "informaltable":
-		return append(r.titled(n, "Table: "), r.table(n, level, depth))
+		return append(r.titled(n, r.formalCaption(n, "Table")), r.table(n, level, depth))
 	case "example", "informalexample", "sidebar":
 		prefix := ""
 		if n.name == "example" {
-			prefix = "Example: "
+			prefix = r.formalCaption(n, "Example")
 		}
 		return append(r.titled(n, prefix), r.blocks(r.without(n.kids, "title", "info"), level, depth)...)
 	case "figure", "informalfigure":
 		r.alt = r.title(n)
-		bs := append(r.titled(n, "Figure: "), r.blocks(r.without(n.kids, "title", "info"), level, depth)...)
+		bs := append(r.titled(n, r.formalCaption(n, "Figure")), r.blocks(r.without(n.kids, "title", "info"), level, depth)...)
 		r.alt = ""
 		return bs
 	case "mediaobject":
@@ -347,6 +362,28 @@ func (r *renderer) title(n *xnode) string {
 		return ""
 	}
 	return strings.TrimSpace(paragraph(r.inlineKids(t)))
+}
+
+// formalCaption returns the caption prefix of a table, example or figure n,
+// "Table 19.1: " for a numbered table, "Table: " for unnumbered ones. Informal
+// objects are not numbered.
+func (r *renderer) formalCaption(n *xnode, kind string) string {
+	num := ""
+	if !strings.HasPrefix(n.name, "informal") && r.title(n) != "" {
+		num = r.formal(strings.ToLower(kind))
+	}
+	return caption(kind, num, ": ")
+}
+
+// caption returns "Kind num: ", or unnumbered the fallback.
+func caption(kind, num, fallback string) string {
+	if num == "" {
+		if fallback == "" {
+			return ""
+		}
+		return kind + fallback
+	}
+	return kind + " " + num + ": "
 }
 
 // titled returns the title of n as a bold paragraph, if it has one.
@@ -389,6 +426,29 @@ func (r *renderer) list(items []*xnode, ordered bool, level, depth int) []string
 	}
 	return joinBlocks(bs)
 }
+
+// calloutList renders the callouts as bullet list, each item starting with
+// the markers of the <co>s it explains, like they appear in the code block.
+func (r *renderer) calloutList(n *xnode, level, depth int) []string {
+	var bs [][]string
+	for i, c := range r.elems(n.kids, "callout") {
+		var marks []string
+		for _, id := range strings.Fields(c.attr["arearefs"]) {
+			if num, ok := r.callouts[id]; ok {
+				marks = append(marks, calloutMark(num))
+			}
+		}
+		if len(marks) == 0 {
+			marks = []string{calloutMark(i + 1)}
+		}
+		bs = append(bs, listItem("-", prefixFirst(r.block(c, level, depth), strings.Join(marks, " "))))
+	}
+	return joinBlocks(bs)
+}
+
+// calloutMark is the marker of callout num in code blocks and callout lists.
+// markdown.Analyze strips it from commands.
+func calloutMark(num int) string { return "<" + strconv.Itoa(num) + ">" }
 
 // defList renders the varlistentries or glossentries of n as a bullet list
 // with the terms in bold.
@@ -498,8 +558,8 @@ func joinBlocks(bs [][]string) []string {
 // codeBlock renders a screen or programlisting as fenced code block. The
 // language attribute becomes the info string; screens with a prompt are
 // marked as console sessions.
-func codeBlock(n *xnode) []string {
-	text := strings.ReplaceAll(strings.TrimRight(n.rawText(), " \t\r\n"), "\r\n", "\n")
+func (r *renderer) codeBlock(n *xnode) []string {
+	text := strings.ReplaceAll(strings.TrimRight(r.verbatim(n), " \t\r\n"), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	for len(lines) > 1 && strings.TrimSpace(lines[0]) == "" {
 		lines = lines[1:]
@@ -516,26 +576,69 @@ func codeBlock(n *xnode) []string {
 	return append(lines, fence)
 }
 
+// verbatim returns the text of a screen or programlisting with its callouts
+// as markers (" <1>", numbered within n) and xrefs to them as their marker.
+// The numbers are recorded for the calloutlist and xrefs that follow.
+func (r *renderer) verbatim(n *xnode) string {
+	for i, co := range n.find("co") {
+		if id := co.attr["id"]; id != "" {
+			r.callouts[id] = i + 1
+		}
+	}
+	var b strings.Builder
+	mark := func(num int) {
+		if s := b.String(); s != "" && !strings.HasSuffix(s, " ") && !strings.HasSuffix(s, "\n") {
+			b.WriteByte(' ')
+		}
+		b.WriteString(calloutMark(num))
+	}
+	cos := 0
+	var walk func(x *xnode)
+	walk = func(x *xnode) {
+		switch x.name {
+		case "":
+			b.WriteString(x.text)
+		case "remark":
+		case "co":
+			cos++
+			mark(cos)
+		case "xref":
+			if num, ok := r.callouts[x.attr["linkend"]]; ok {
+				mark(num)
+			}
+		default:
+			for _, k := range x.kids {
+				walk(k)
+			}
+		}
+	}
+	walk(n)
+	return b.String()
+}
+
 // table renders a CALS or HTML table as GFM table. Block content of cells is
-// flattened, rows without header use the first row as header.
+// flattened, rows without header use the first row as header. A cell
+// spanning rows (morerows, rowspan) is repeated in each of them, one spanning
+// columns (namest/nameend, colspan) fills the first and leaves the others
+// empty, so that every cell stays in its column.
 func (r *renderer) table(n *xnode, level, depth int) []string {
 	var head []string
 	var rows [][]string
-	var walk func(x *xnode, inHead bool)
-	walk = func(x *xnode, inHead bool) {
+	cols := 0
+	var walk func(x *xnode, inHead bool, colIdx map[string]int)
+	walk = func(x *xnode, inHead bool, colIdx map[string]int) {
+		carried := map[int]*carry{} // cells of rows above spanning into the next rows, by column
 		for _, k := range r.flat(x.kids) {
 			switch k.name {
-			case "tgroup", "tbody", "tfoot":
-				walk(k, false)
+			case "tgroup":
+				cols = max(cols, atoi(k.attr["cols"]))
+				walk(k, false, colSpecs(r.flat(k.kids)))
+			case "tbody", "tfoot":
+				walk(k, false, colIdx)
 			case "thead":
-				walk(k, true)
+				walk(k, true, colIdx)
 			case "row", "tr":
-				var cells []string
-				for _, c := range r.flat(k.kids) {
-					if c.name == "entry" || c.name == "td" || c.name == "th" {
-						cells = append(cells, r.cell(c, level, depth))
-					}
-				}
+				cells := r.row(k, colIdx, carried, level, depth)
 				if inHead && head == nil {
 					head = cells
 				} else {
@@ -544,11 +647,11 @@ func (r *renderer) table(n *xnode, level, depth int) []string {
 			}
 		}
 	}
-	walk(n, false)
+	walk(n, false, nil)
 	if head == nil && len(rows) > 0 {
 		head, rows = rows[0], rows[1:]
 	}
-	cols := len(head)
+	cols = max(cols, len(head))
 	for _, row := range rows {
 		cols = max(cols, len(row))
 	}
@@ -564,6 +667,91 @@ func (r *renderer) table(n *xnode, level, depth int) []string {
 		lines = append(lines, tableRow(row, cols))
 	}
 	return lines
+}
+
+// carry is a cell spanning into the rows below.
+type carry struct {
+	text string
+	rows int // rows left to fill
+}
+
+// colSpecs maps the colnames of the colspecs to column indexes.
+func colSpecs(kids []*xnode) map[string]int {
+	idx := map[string]int{}
+	col := 0
+	for _, k := range kids {
+		if k.name != "colspec" {
+			continue
+		}
+		if n := atoi(k.attr["colnum"]); n > 0 {
+			col = n - 1
+		}
+		if name := k.attr["colname"]; name != "" {
+			idx[name] = col
+		}
+		col++
+	}
+	return idx
+}
+
+// row renders the cells of a table row, placing them in their columns: cells
+// carried from rows above take their columns first, namest and colname name
+// the column of a CALS entry.
+func (r *renderer) row(row *xnode, colIdx map[string]int, carried map[int]*carry, level, depth int) []string {
+	var cells []string
+	taken := map[int]bool{}
+	set := func(i int, s string) {
+		for len(cells) <= i {
+			cells = append(cells, "")
+		}
+		cells[i] = s
+		taken[i] = true
+	}
+	for i, c := range carried {
+		set(i, c.text)
+		if c.rows--; c.rows == 0 {
+			delete(carried, i)
+		}
+	}
+	col := 0
+	for _, c := range r.flat(row.kids) {
+		if c.name != "entry" && c.name != "td" && c.name != "th" {
+			continue
+		}
+		if i, ok := colIdx[firstNonEmpty(c.attr["namest"], c.attr["colname"])]; ok {
+			col = i
+		}
+		for taken[col] {
+			col++
+		}
+		end := col
+		if i, ok := colIdx[c.attr["nameend"]]; ok && i > col {
+			end = i
+		}
+		if span := atoi(c.attr["colspan"]); span > 1 {
+			end = col + span - 1
+		}
+		text := r.cell(c, level, depth)
+		rows := max(atoi(c.attr["morerows"]), atoi(c.attr["rowspan"])-1)
+		for i := col; i <= end; i++ {
+			s := ""
+			if i == col {
+				s = text
+			}
+			set(i, s)
+			if rows > 0 {
+				carried[i] = &carry{text: s, rows: rows}
+			}
+		}
+		col = end + 1
+	}
+	return cells
+}
+
+// atoi returns the number in s, 0 if it is none.
+func atoi(s string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	return n
 }
 
 func tableRow(cells []string, cols int) string {
@@ -686,6 +874,9 @@ func (r *renderer) inline(n *xnode) string {
 		}
 		return bold(strings.Join(parts, sep))
 	case "xref":
+		if num, ok := r.callouts[n.attr["linkend"]]; ok {
+			return calloutMark(num)
+		}
 		return r.xref(n.attr["linkend"], "")
 	case "link":
 		return r.link(n)

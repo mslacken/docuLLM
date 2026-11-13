@@ -127,7 +127,8 @@ type dbModule struct {
 	id       string // xml:id of the topic, or of the module for containers
 	title    string
 	abstract *xnode // merge override or topic abstract, nil if none
-	renderAs string
+	renderAs string // section, appendix, ... or the element name (chapter, preface, ...) in books
+	book     *xnode // book (or set) the module belongs to, nil in assemblies
 	file     string // topic file relative to the corpus root, "" for containers
 	topic    *xnode // profiled topic root, nil for containers
 	legacy   []string
@@ -220,12 +221,16 @@ func (l *xmlLoader) buildDocBook(name string) (docparse.Document, []docparse.Glo
 	var lines, legal, license []string
 	chapterIDs := map[string]int{}
 	for _, m := range modules {
+		// modules that are not chapters still take their number
 		switch {
 		case m.topic != nil && docparse.IsLegalNotice(m.title):
+			r.number(m, 0)
 			legal = append(legal, m.topic.flatText())
-		case m.topic != nil && docparse.IsLicenseTitle(m.title):
+		case m.topic != nil && (docparse.IsLicenseTitle(m.title) || m.renderAs == "appendix" && m.topic.attr["role"] == "legal"):
+			r.number(m, 0)
 			license = append(license, m.topic.flatText())
 		case m.renderAs == "glossary" || isGlossaryTopic(m.topic):
+			r.number(m, 0)
 		default:
 			if len(lines) > 0 {
 				lines = append(lines, "")
@@ -447,10 +452,11 @@ func (l *xmlLoader) modules(parent *xnode, resources map[string]string, prof pro
 }
 
 // isStructural reports whether an element is a container that becomes its own
-// chapter (a book, part, chapter or article of a set).
+// chapter (a book, part, chapter, preface, appendix, glossary or article of a
+// set).
 func isStructural(name string) bool {
 	switch name {
-	case "book", "part", "chapter", "simplechapter", "article":
+	case "book", "part", "chapter", "simplechapter", "article", "preface", "appendix", "glossary":
 		return true
 	}
 	return false
@@ -460,7 +466,7 @@ func isStructural(name string) bool {
 // book's top level chapters are split into. Parts and sets are containers.
 func isLeafStructural(name string) bool {
 	switch name {
-	case "chapter", "simplechapter", "article":
+	case "chapter", "simplechapter", "article", "preface", "appendix", "glossary":
 		return true
 	}
 	return false
@@ -509,7 +515,7 @@ func findByID(n *xnode, id string) *xnode {
 // node itself for an article or chapter.
 func (l *xmlLoader) chaptersFromNode(target *xnode) []*dbModule {
 	if target.name == "set" || target.name == "book" {
-		out := l.collectLeafChapters(target)
+		out := l.collectLeafChapters(target, target)
 		if len(out) > 0 {
 			return out
 		}
@@ -520,25 +526,26 @@ func (l *xmlLoader) chaptersFromNode(target *xnode) []*dbModule {
 // collectLeafChapters returns the leaf structural elements below target, in
 // document order. Containers (book, part, set) are descended into, following
 // <xi:include> nodes, so a book's parts and the chapters they include all
-// become top level chapters.
-func (l *xmlLoader) collectLeafChapters(n *xnode) []*dbModule {
+// become top level chapters. book is the innermost book (or set) around n; the
+// chapters of every book of a set are numbered on their own.
+func (l *xmlLoader) collectLeafChapters(n, book *xnode) []*dbModule {
 	var out []*dbModule
 	for _, k := range n.kids {
 		if k.name == "" {
 			continue
 		}
+		k = structuralRoot(k)
 		switch {
 		case isLeafStructural(k.name):
-			out = append(out, l.structModule(k))
+			m := l.structModule(k)
+			m.book = book
+			out = append(out, m)
 		case isContainerStructural(k.name):
-			out = append(out, l.collectLeafChapters(k)...)
-		case k.name == includeNode:
-			inc := structuralRoot(k)
-			if isContainerStructural(inc.name) {
-				out = append(out, l.collectLeafChapters(inc)...)
-			} else if isLeafStructural(inc.name) {
-				out = append(out, l.structModule(inc))
+			b := book
+			if k.name == "book" {
+				b = k
 			}
+			out = append(out, l.collectLeafChapters(k, b)...)
 		}
 	}
 	return out
@@ -560,11 +567,11 @@ func (l *xmlLoader) structModule(n *xnode) *dbModule {
 		id:       n.attr["id"],
 		title:    n.titleNode().flatText(),
 		abstract: n.info("abstract"),
-		renderAs: "section",
+		renderAs: n.name,
 	}
 	var content []*xnode
 	for _, k := range n.kids {
-		if k.name == "" || isStructural(k.name) {
+		if k.name == "" || isStructural(structuralRoot(k).name) {
 			continue
 		}
 		content = append(content, k)
@@ -573,7 +580,7 @@ func (l *xmlLoader) structModule(n *xnode) *dbModule {
 		m.topic = &xnode{name: n.name, attr: n.attr, kids: content}
 	}
 	for _, k := range n.kids {
-		if k.name != "" && isStructural(k.name) {
+		if k = structuralRoot(k); k.name != "" && isStructural(k.name) {
 			m.kids = append(m.kids, l.structModule(k))
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"docullm/internal/docparse"
+	"docullm/internal/docparse/markdown"
 )
 
 // writeFiles creates the files (name -> content) below a new temp dir.
@@ -328,7 +329,7 @@ func TestDocBookCorpus(t *testing.T) {
 		t.Fatalf("chapters = %+v", sles.Chapters)
 	}
 	ch := sles.Chapters[0]
-	if ch.ID != "install" || ch.Title != "Install it" || ch.FilePath != "tasks/install.xml" || ch.TopicType != "task" ||
+	if ch.ID != "install" || ch.Number != "1" || ch.Title != "Install it" || ch.FilePath != "tasks/install.xml" || ch.TopicType != "task" ||
 		ch.Maintainer != "geeko@example.com" || ch.Summary != "How to install the demo." {
 		t.Errorf("chapter = %+v", ch)
 	}
@@ -344,21 +345,21 @@ func TestDocBookCorpus(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ch.Links, []docparse.Link{{URL: "https://example.com/docs", Text: "the docs"}}) ||
 		!reflect.DeepEqual(ch.Images, []docparse.Image{{File: "images/overview.png", Alt: "Overview"}}) ||
-		!reflect.DeepEqual(ch.Procedures, []docparse.Procedure{{ID: "proc-install", Title: "Installing the package", Steps: 2}}) ||
+		!reflect.DeepEqual(ch.Procedures, []docparse.Procedure{{ID: "proc-install", Number: "1", Title: "Installing the package", Steps: 2}}) ||
 		!reflect.DeepEqual(ch.Admonitions, []docparse.Admonition{{Type: "note", Title: "Be careful"}}) ||
-		!reflect.DeepEqual(ch.Sections, []docparse.Section{{ID: "install-verify", Title: "Verifying", Level: 1}}) {
+		!reflect.DeepEqual(ch.Sections, []docparse.Section{{ID: "install-verify", Number: "1.1", Title: "Verifying", Level: 1}}) {
 		t.Errorf("structure = %+v %+v %+v %+v %+v", ch.Links, ch.Images, ch.Procedures, ch.Admonitions, ch.Sections)
 	}
 
 	md := c.Text(&ch)
 	for _, want := range []string{
-		"## Install it {#install}\n\nHow to install the `demo`.\n\nOnly on SLES.\n\nSee [Details](#about-sec), [dangling](#dangling) and [the docs](https://example.com/docs).\n",
-		"**Installing the package**\n\n1. Install the package:\n\n    ```console\n    > sudo zypper in PKG\n    ```\n\n    1. Check it.\n\n2. Reboot:\n",
+		"## 1 Install it {#install}\n\nHow to install the `demo`.\n\nOnly on SLES.\n\nSee [Details](#about-sec), [dangling](#dangling) and [the docs](https://example.com/docs).\n",
+		"**Procedure 1: Installing the package**\n\n1. Install the package:\n\n    ```console\n    > sudo zypper in PKG <1>\n    ```\n\n    1. Check it.\n\n2. Reboot:\n",
 		"> **Note:** Be careful\n>\n> A note with **Menu**.\n",
 		"- **`--force`**\n\n    Force it.\n",
-		"**Figure: Overview**\n\n![Overview](images/overview.png)\n",
-		"**Table: Options**\n\n| Name | Meaning |\n| --- | --- |\n| `a\\|b` | One<br>Two |\n",
-		"### Verifying {#install-verify}\n\n```bash\n# rpm -q demo\n```",
+		"**Figure 1: Overview**\n\n![Overview](images/overview.png)\n",
+		"**Table 1: Options**\n\n| Name | Meaning |\n| --- | --- |\n| `a\\|b` | One<br>Two |\n",
+		"### 1.1 Verifying {#install-verify}\n\n```bash\n# rpm -q demo\n```",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown lacks %q:\n%s", want, md)
@@ -372,11 +373,11 @@ func TestDocBookCorpus(t *testing.T) {
 	}
 
 	more := sles.Chapters[1]
-	if more.ID != "more" || more.TopicType != "container" || more.Summary != "Container abstract." ||
-		!reflect.DeepEqual(more.Sections, []docparse.Section{{ID: "about", Title: "About the demo", Level: 1, File: "concepts/about.xml"}, {ID: "about-sec", Title: "Details", Level: 2}}) {
+	if more.ID != "more" || more.Number != "2" || more.TopicType != "container" || more.Summary != "Container abstract." ||
+		!reflect.DeepEqual(more.Sections, []docparse.Section{{ID: "about", Number: "2.1", Title: "About the demo", Level: 1, File: "concepts/about.xml"}, {ID: "about-sec", Number: "2.1.1", Title: "Details", Level: 2}}) {
 		t.Errorf("container chapter = %+v", more)
 	}
-	if want := "## More {#more}\n\nContainer abstract.\n\n### About the demo {#about}\n\nThe CIB of SUSE Linux Enterprise Server.\n\n#### Details {#about-sec}"; !strings.HasPrefix(c.Text(&more), want) {
+	if want := "## 2 More {#more}\n\nContainer abstract.\n\n### 2.1 About the demo {#about}\n\nThe CIB of SUSE Linux Enterprise Server.\n\n#### 2.1.1 Details {#about-sec}"; !strings.HasPrefix(c.Text(&more), want) {
 		t.Errorf("container markdown = %q", c.Text(&more))
 	}
 	if !reflect.DeepEqual(more.Terms, []string{"CIB (cluster information base)"}) {
@@ -440,5 +441,131 @@ func TestStructureFallback(t *testing.T) {
 		if got := selectStructure(asm, id).attr["id"]; got != want {
 			t.Errorf("selectStructure(%q) = %q, want %q", id, got, want)
 		}
+	}
+}
+
+func TestBookNumbering(t *testing.T) {
+	root := writeFiles(t, map[string]string{
+		"DC-set": "MAIN=\"set.xml\"\n",
+		"xml/set.xml": `<set xmlns="http://docbook.org/ns/docbook" xmlns:xi="http://www.w3.org/2001/XInclude" xml:id="set">
+  <info><title>All</title></info>
+  <book xml:id="b1"><info><title>Book one</title></info>
+    <preface xml:id="pre"><title>About</title><section xml:id="pre-s"><title>Conventions</title><para>x</para></section></preface>
+    <part xml:id="p1"><title>Part</title>
+      <chapter xml:id="c1"><title>First</title><para>Intro.</para>
+        <procedure><title>Doing</title><step><para>Do.</para></step></procedure>
+        <procedure><step><para>Untitled.</para></step></procedure>
+        <section xml:id="c1-s1"><title>One</title>
+          <figure><title>Pic</title><mediaobject><imageobject><imagedata fileref="a.png"/></imageobject></mediaobject></figure>
+          <section xml:id="c1-s1-1"><title>Deep</title><para>d</para></section>
+        </section>
+        <section xml:id="c1-s2"><title>Two</title><informaltable><tgroup cols="1"><tbody><row><entry>e</entry></row></tbody></tgroup></informaltable></section>
+      </chapter>
+      <xi:include href="chap2.xml"/>
+    </part>
+    <appendix xml:id="app"><title>Extra</title><section xml:id="app-s"><title>More</title><para>m</para></section></appendix>
+    <appendix role="legal"><title>GNU licenses</title><para>GNU Free Documentation License Version 1.2</para></appendix>
+  </book>
+  <book xml:id="b2"><info><title>Book two</title></info>
+    <chapter xml:id="c3"><title>Again first</title><para>a</para></chapter>
+  </book>
+</set>
+`,
+		"xml/chap2.xml": `<chapter xmlns="http://docbook.org/ns/docbook" xml:id="c2"><title>Second</title>
+  <table><title>T</title><tgroup cols="1"><tbody><row><entry>e</entry></row></tbody></tgroup></table></chapter>
+`,
+	})
+	c, err := loadCorpus(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := c.Documents[0]
+	var got []string
+	for _, ch := range doc.Chapters {
+		got = append(got, ch.Number+" "+ch.Title)
+	}
+	if want := []string{" About", "1 First", "2 Second", "A Extra", "1 Again first"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("chapters = %q, want %q", got, want)
+	}
+	pre, first, app := doc.Chapters[0], doc.Chapters[1], doc.Chapters[3]
+	if pre.Sections[0].Number != "1" || pre.RenderAs != "preface" {
+		t.Errorf("preface = %+v", pre)
+	}
+	if want := []docparse.Section{{ID: "c1-s1", Number: "1.1", Title: "One", Level: 1}, {ID: "c1-s1-1", Number: "1.1.1", Title: "Deep", Level: 2}, {ID: "c1-s2", Number: "1.2", Title: "Two", Level: 1}}; !reflect.DeepEqual(first.Sections, want) {
+		t.Errorf("sections = %+v", first.Sections)
+	}
+	if first.Procedures[0].Number != "1.1" || first.Procedures[1].Number != "" {
+		t.Errorf("procedures = %+v", first.Procedures)
+	}
+	if app.Sections[0].Number != "A.1" {
+		t.Errorf("appendix sections = %+v", app.Sections)
+	}
+	md := c.Text(&first)
+	for _, want := range []string{"## 1 First {#c1}", "**Procedure 1.1: Doing**", "### 1.1 One {#c1-s1}", "**Figure 1.1: Pic**", "#### 1.1.1 Deep {#c1-s1-1}"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("markdown lacks %q:\n%s", want, md)
+		}
+	}
+	if !strings.Contains(c.Text(&doc.Chapters[2]), "**Table 2.1: T**") {
+		t.Errorf("second chapter = %s", c.Text(&doc.Chapters[2]))
+	}
+	if doc.License == "" {
+		t.Error("legal appendix not taken as license")
+	}
+}
+
+// render renders the DocBook fragment src as the blocks of a chapter.
+func render(t *testing.T, src string) string {
+	t.Helper()
+	n, err := decodeXML(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRenderer("")
+	r.ch = &docparse.Chapter{}
+	return strings.Join(joinBlocks(r.blocks(n.kids, 2, 1)), "\n")
+}
+
+func TestCallouts(t *testing.T) {
+	md := render(t, `<x><screen>&gt; <command>oscap</command> eval<co xml:id="co-a"/> \
+  --profile p<co xml:id="co-b"/>
+Type=forking <co xml:id="co-c"/>
+PIDFile=FILE<xref linkend="co-a"/></screen>
+<calloutlist><callout arearefs="co-a"><para>Evaluates.</para></callout><callout arearefs="co-b co-c"><para>Both.</para></callout></calloutlist>
+<para>See <xref linkend="co-b"/>.</para></x>`)
+	want := "```\n> oscap eval <1> \\\n  --profile p <2>\nType=forking <3>\nPIDFile=FILE <1>\n```\n\n- <1> Evaluates.\n\n- <2> <3> Both.\n\nSee <2>."
+	if md != want {
+		t.Errorf("got\n%s\nwant\n%s", md, want)
+	}
+	if cmds := markdown.CommandsInText("> oscap eval <1> \\\n  --profile p <2>\n> virsh vol-create-as POOL <1>NAME <2> 12G"); !reflect.DeepEqual(cmds, []string{"oscap eval --profile p", "virsh vol-create-as POOL NAME 12G"}) {
+		t.Errorf("commands = %q", cmds)
+	}
+}
+
+func TestTableSpans(t *testing.T) {
+	md := render(t, `<x><informaltable><tgroup cols="3">
+  <colspec colname="c1"/><colspec colname="c2"/><colspec colname="c3"/>
+  <thead><row><entry>Group</entry><entry namest="c2" nameend="c3">Keys</entry></row></thead>
+  <tbody>
+    <row><entry morerows="2">Common</entry><entry>^J</entry><entry>engage</entry></row>
+    <row><entry>^L</entry><entry>cancel</entry></row>
+    <row><entry colname="c3">only last</entry></row>
+    <row><entry namest="c1" nameend="c3">full width</entry></row>
+    <row><entry>a</entry><entry>b</entry><entry>c</entry></row>
+  </tbody></tgroup></informaltable>
+<informaltable><tr><td rowspan="2">r</td><td colspan="2">wide</td></tr><tr><td>x</td><td>y</td></tr></informaltable></x>`)
+	want := `| Group | Keys |  |
+| --- | --- | --- |
+| Common | ^J | engage |
+| Common | ^L | cancel |
+| Common |  | only last |
+| full width |  |  |
+| a | b | c |
+
+| r | wide |  |
+| --- | --- | --- |
+| r | x | y |`
+	if md != want {
+		t.Errorf("got\n%s\nwant\n%s", md, want)
 	}
 }

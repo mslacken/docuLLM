@@ -67,12 +67,24 @@ func TestReadDocument(t *testing.T) {
 	if len(c.Documents) != 1 || len(c.Glossary) != 3 {
 		t.Fatalf("got %d documents and %d glossary entries", len(c.Documents), len(c.Glossary))
 	}
+
+	tocOnly, err := BuildReadDocument(c, "guide", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := []string{tocOnly.TOC[0].ID, tocOnly.TOC[1].ID}; !reflect.DeepEqual(ids, []string{"setup", "setup-2"}) {
+		t.Errorf("toc ids = %q", ids)
+	}
+	if tocOnly.Chapter != nil {
+		t.Errorf("expected no chapter in table-of-contents result, got %+v", tocOnly.Chapter)
+	}
+
 	out, err := BuildReadDocument(c, "guide", "setup")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ids := []string{out.TOC[0].ID, out.TOC[1].ID}; !reflect.DeepEqual(ids, []string{"setup", "setup-2"}) {
-		t.Errorf("toc ids = %q", ids)
+	if len(out.TOC) != 0 {
+		t.Errorf("expected no table of contents with a chapter, got %d entries", len(out.TOC))
 	}
 	ch := out.Chapter
 	if !strings.HasPrefix(ch.Markdown, "## Setup\n\nThe CIB") || ch.SourcePath != "guide/index.md" {
